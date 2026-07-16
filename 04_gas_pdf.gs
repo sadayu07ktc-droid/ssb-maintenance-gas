@@ -1,0 +1,151 @@
+/**
+ * สร้าง PDF ใบแจ้งซ่อม FM-EN-04 จากแท็บ "FormTemplate" (ตรงฟอร์มเป๊ะ 1 หน้า)
+ * วิธี: copy แท็บ FormTemplate -> แทนค่า {{placeholder}} -> export เป็น PDF
+ *
+ * ต้องมีแท็บ "FormTemplate" (import จาก FM-EN-04.xls + วาง placeholder)
+ * ครั้งแรก: รัน testPdf() 1 ครั้ง เพื่ออนุญาตสิทธิ์ แล้วดูลิงก์ใน log
+ */
+function getPdfFolder(){
+  var it = DriveApp.getFoldersByName('ssb-maintenance-pdf');
+  return it.hasNext() ? it.next() : DriveApp.createFolder('ssb-maintenance-pdf');
+}
+function chk(v, on){ return String(v) === on ? '●' : '○'; }  // วงกลมทึบ=เลือก / โปร่ง=ไม่เลือก
+// แปลง line_user_id -> ชื่อพนักงาน (จากแท็บ Employees)
+function empNameByLine(lid){
+  if(!lid) return '';
+  var e = getRows(SHEETS.EMP).filter(function(r){ return String(r.line_user_id) === String(lid); })[0];
+  return e ? (e.full_name || String(lid)) : String(lid);
+}
+function money(v){ v = String(v==null?'':v).replace(/,/g,''); return (v!=='' && !isNaN(v)) ? Number(v).toLocaleString() : ''; }
+function ddmmyyyy(d){ var p = String(d||'').slice(0,10).split('-'); return p.length===3 ? (p[2]+'-'+p[1]+'-'+p[0]) : String(d||''); }
+
+function kindLine(v){ return chk(v,'repair')+' ซ่อม   '+chk(v,'replace_part')+' เปลี่ยนอะไหล่   '+chk(v,'inspect')+' ตรวจเช็ค   '+chk(v,'tire')+' เปลี่ยนยาง   '+chk(v,'install')+' ติดตั้ง   '+chk(v,'other')+' อื่นๆ'; }
+function catLine(v){ return chk(v,'machine')+' เครื่องจักร   '+chk(v,'electrical')+' ระบบไฟฟ้า   '+chk(v,'building')+' อาคาร-สถานที่   '+chk(v,'vehicle')+' รถ   '+chk(v,'other')+' อื่นๆ'; }
+
+function genPdf(ticketNo){
+  var r = getRows(SHEETS.REQ).filter(function(x){ return x.ticket_no === ticketNo; })[0];
+  if(!r) throw 'ไม่พบใบ ' + ticketNo;
+  var veh = r.vehicle_key ? getRows(SHEETS.VEH).filter(function(v){ return v.vehicle_key === r.vehicle_key; })[0] : null;
+  var isVeh = !!r.vehicle_key;
+
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var tpl = ss.getSheetByName('FormTemplate');
+  if(!tpl) throw 'ไม่พบแท็บ FormTemplate (import ฟอร์ม + วาง placeholder ก่อน)';
+
+  // อาการ (รวมข้อมูลรถ + เงิน เพราะฟอร์มเดิมไม่มีช่องไมล์/เงิน)
+  var sym = r.symptom || '';
+  if(isVeh){
+    var extra = [];
+    if(r.mileage) extra.push('เลขไมล์ ' + money(r.mileage));
+    if(r.service_interval_km) extra.push('ระยะเช็ค ' + money(r.service_interval_km) + ' กม.');
+    if(r.vendor) extra.push('ศูนย์/อู่ ' + r.vendor);
+    if(extra.length) sym = (sym ? sym + '  ' : '') + '[' + extra.join(' · ') + ']';
+  }
+  if(r.amount) sym += '   จำนวนเงิน ' + money(r.amount) + ' บาท';
+
+  var apprvName = r.approver_id ? empNameByLine(r.approver_id) : '';
+  var apprv = apprvName + (r.approved_at ? ('   ✔ ' + ddmmyyyy(r.approved_at)) : '   (รออนุมัติ)');
+  var repTime = ''; var _mt = String(r.reported_at||'').match(/\d{1,2}:\d{2}/); if(_mt) repTime = _mt[0];
+
+  var map = {
+    'ผู้แจ้ง':      r.requester_name || '',
+    'หน่วยงาน':     r.department || '',
+    'เลขที่':       r.ticket_no,
+    'วันที่':       ddmmyyyy(r.reported_at),
+    'เวลา':         repTime ? (repTime + ' น.') : '',
+    'ซ่อมใน':       chk(r.repair_by,'internal'),
+    'ซ่อมนอก':      chk(r.repair_by,'external'),
+    'อู่':          r.vendor ? ('(' + r.vendor + ')') : '',
+    'วันที่อนุมัติ': ddmmyyyy(r.approved_at),
+    'รหัส':         isVeh ? (veh ? veh.plate_current : r.vehicle_key) : (r.machine_code || ''),
+    'ชื่อเครื่อง':   isVeh ? (veh ? veh['ยี่ห้อ_รุ่น'] : '') : (r.machine_name || ''),
+    'ประเภทคำขอ':   kindLine(r.request_kind),
+    'ประเภทงาน':    catLine(r.asset_category),
+    'อาการ':        sym,
+    'ผู้แจ้งเซ็น':   r.requester_name || '',
+    'ผู้อนุมัติ':    apprv,
+    'สาเหตุ':       r.cause || '',
+    'การแก้ไข':     r.fix_detail || ''
+  };
+
+  // copy แท็บ -> แทนค่า
+  var tmpName = '__pdf_' + ticketNo;
+  var ex = ss.getSheetByName(tmpName); if(ex) ss.deleteSheet(ex);
+  var tmp = tpl.copyTo(ss).setName(tmpName);
+  SpreadsheetApp.flush();
+  Object.keys(map).forEach(function(k){ tmp.createTextFinder('{{' + k + '}}').replaceAllWith(String(map[k])); });
+  SpreadsheetApp.flush();
+
+  // export แท็บนั้นเป็น PDF (ขนาด/ฟอนต์ = ตามที่จัดในแท็บ FormTemplate เป๊ะ ไม่มีโค้ดทับ)
+  var url = 'https://docs.google.com/spreadsheets/d/' + ss.getId() + '/export?format=pdf'
+    + '&gid=' + tmp.getSheetId()
+    + '&size=A4&portrait=true&fitw=true&gridlines=false&sheetnames=false&printtitle=false&pagenumbers=false&fzr=false'
+    + '&top_margin=0.4&bottom_margin=0.4&left_margin=0.4&right_margin=0.4';
+  var resp = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() } });
+  var pdf = resp.getBlob().setName('ใบแจ้งซ่อม_' + ticketNo + '.pdf');
+
+  var folder = getPdfFolder();
+  var old = folder.getFilesByName('ใบแจ้งซ่อม_' + ticketNo + '.pdf'); while(old.hasNext()){ old.next().setTrashed(true); }
+  var file = folder.createFile(pdf);
+  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  ss.deleteSheet(tmp); // ลบแท็บชั่วคราว
+
+  var link = 'https://drive.google.com/file/d/' + file.getId() + '/view';
+  patchByTicket(SHEETS.REQ, ticketNo, { pdf_url: link, updated_at: now() });
+  return link;
+}
+
+// สำรวจตำแหน่งเซลล์ในฟอร์ม (รันแล้วก๊อป log ส่งให้ผม)
+function dumpTemplate(){
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('FormTemplate');
+  if(!sh){ Logger.log('ไม่พบแท็บ FormTemplate'); return; }
+  var vals = sh.getDataRange().getValues();
+  var out = [];
+  for(var i=0;i<vals.length;i++){
+    for(var j=0;j<vals[i].length;j++){
+      var v = String(vals[i][j]).trim();
+      if(v!=='') out.push(sh.getRange(i+1,j+1).getA1Notation()+' = '+v);
+    }
+  }
+  var merges = sh.getDataRange().getMergedRanges().map(function(m){ return m.getA1Notation(); });
+  Logger.log('==== CELLS ====\n' + out.join('\n') + '\n\n==== MERGES ====\n' + merges.join('   '));
+}
+
+// วาง placeholder ลงฟอร์มอัตโนมัติ (รันครั้งเดียว)
+function setupFormPlaceholders(){
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('FormTemplate');
+  if(!sh) throw 'ไม่พบแท็บ FormTemplate';
+  try{ sh.getRange('E10:S13').merge(); }catch(e){}   // รวมกล่องอาการเป็นช่องเดียว
+  sh.createTextFinder('¦').replaceAllWith('○');       // เปลี่ยน ¦ ที่เหลือเป็น ○ วงกลม
+  var set = {
+    'G3': 'ชื่อผู้แจ้ง {{ผู้แจ้ง}}',
+    'M3': 'หน่วยงาน {{หน่วยงาน}}',
+    'R3': 'เลขที่ {{เลขที่}}',
+    'G4': 'วันที่แจ้งซ่อม {{วันที่}}',
+    'N4': 'เวลาแจ้งซ่อม {{เวลา}}',
+    'H5': '{{ซ่อมใน}} ซ่อมโดยช่างภายใน',
+    'N5': '{{ซ่อมนอก}} ติดต่อผู้ซ่อมจากภายนอก {{อู่}}',
+    'E7': '{{รหัส}}',
+    'K7': '{{ชื่อเครื่อง}}',
+    'E8': '{{ประเภทคำขอ}}',
+    'E9': '{{ประเภทงาน}}',
+    'E10': '{{อาการ}}',
+    'B14': '{{ผู้แจ้งเซ็น}}',
+    'M14': '{{ผู้อนุมัติ}}',
+    'S14': '{{วันที่อนุมัติ}}',
+    'B16': '{{สาเหตุ}}',
+    'B22': '{{การแก้ไข}}'
+  };
+  Object.keys(set).forEach(function(a1){ sh.getRange(a1).setValue(set[a1]); });
+  sh.getRange('E10').setWrap(true);
+  // ฟอนต์/ขนาด: จัดเองในแท็บ FormTemplate ได้เลย โค้ดไม่ไปยุ่งแล้ว
+  return 'วาง placeholder ' + Object.keys(set).length + ' ช่อง เสร็จ';
+}
+
+function testPdf(){
+  var r = getRows(SHEETS.REQ)[0];
+  if(!r){ Logger.log('ยังไม่มีใบแจ้งซ่อม — ส่งสักใบจากแอปก่อน'); return; }
+  var url = genPdf(r.ticket_no);
+  Logger.log('PDF พร้อม: ' + url);
+  return url;
+}

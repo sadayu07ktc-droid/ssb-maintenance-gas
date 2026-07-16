@@ -1,0 +1,335 @@
+/**
+ * ssb-maintenance — GAS backend (Phase 2)
+ * ผูกกับ Google Sheet "ssb-maintenance-db"
+ *
+ * วิธีติดตั้ง:
+ *  1) ในชีต: Extensions → Apps Script → ลบโค้ดเดิม แล้ววางไฟล์นี้ทั้งหมด → Save
+ *  2) รันฟังก์ชัน setup() 1 ครั้ง (กด Run, อนุญาตสิทธิ์) → สร้างหัวคอลัมน์ให้ Requests/Employees/StatusLogs
+ *  3) Deploy → New deployment → Web app → Execute as: Me, Who has access: Anyone → คัดลอก URL
+ *  4) ทดสอบ: เปิด <URL>?action=ping  และ  <URL>?action=vehicles  ในเบราว์เซอร์ (ควรได้ JSON)
+ */
+
+// ===== CONFIG =====
+var TZ = 'Asia/Bangkok';
+var SHEETS = {
+  VEH: 'Vehicles', HIST: 'MaintenanceRecords',
+  REQ: 'Requests', EMP: 'Employees', LOG: 'StatusLogs'
+};
+
+var HEADERS = {
+  Requests: ['ticket_no','product_line','requester_id','requester_name','department','reported_at',
+    'request_type','repair_by','asset_category','request_kind','machine_code','machine_name',
+    'vehicle_key','symptom','mileage','service_interval_km','vendor','receipt_no','amount',
+    'receipt_urls','symptom_urls','cause','cause_type','fix_detail','due_date','prevention',
+    'contamination','technician1','technician2','repair_start','repair_finish','received_by',
+    'reviewed_by','reviewed_at','accepted_by','accepted_at','approver_id','approved_at',
+    'rejected_reason','status','pdf_url','created_at','updated_at','assignee_id','assignee_name'],
+  Employees: ['id','line_user_id','emp_code','full_name','department','phone','role','active'],
+  StatusLogs: ['id','ticket_no','from_status','to_status','actor','note','created_at']
+};
+
+// ===== SHEET HELPERS =====
+function getReceiptFolder(){
+  var it = DriveApp.getFoldersByName('ssb-maintenance-receipts');
+  return it.hasNext() ? it.next() : DriveApp.createFolder('ssb-maintenance-receipts');
+}
+function ss(){ return SpreadsheetApp.getActiveSpreadsheet(); }
+function sh(name){ return ss().getSheetByName(name); }
+function now(){ return Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm:ss'); }
+function uuid(){ return Utilities.getUuid(); }
+
+function getRows(name){
+  var s = sh(name); if(!s) return [];
+  var vals = s.getDataRange().getValues();
+  if(vals.length < 2) return [];
+  var head = vals[0];
+  var out = [];
+  for(var i=1;i<vals.length;i++){
+    if(vals[i].join('') === '') continue;
+    var o = {};
+    for(var c=0;c<head.length;c++){
+      var val = vals[i][c];
+      if(val instanceof Date){ var _t = Utilities.formatDate(val, TZ, 'HH:mm'); val = Utilities.formatDate(val, TZ, 'yyyy-MM-dd') + (_t==='00:00' ? '' : ' '+_t); }
+      o[head[c]] = val;
+    }
+    o._row = i + 1;
+    out.push(o);
+  }
+  return out;
+}
+function appendObj(name, obj){
+  var s = sh(name);
+  var head = s.getRange(1,1,1,s.getLastColumn()).getValues()[0];
+  var row = head.map(function(h){ return obj[h] !== undefined ? obj[h] : ''; });
+  s.appendRow(row);
+}
+function patchByTicket(name, ticket, patch){
+  var s = sh(name);
+  var vals = s.getDataRange().getValues();
+  var head = vals[0];
+  var tcol = head.indexOf('ticket_no');
+  for(var i=1;i<vals.length;i++){
+    if(String(vals[i][tcol]) === String(ticket)){
+      for(var c=0;c<head.length;c++){
+        if(patch[head[c]] !== undefined) s.getRange(i+1, c+1).setValue(patch[head[c]]);
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+// เพิ่มคอลัมน์ assignee ในแท็บ Requests ถ้ายังไม่มี
+function ensureReqCols(){
+  var s = sh(SHEETS.REQ);
+  var head = s.getRange(1,1,1,Math.max(1,s.getLastColumn())).getValues()[0];
+  ['assignee_id','assignee_name'].forEach(function(c){
+    if(head.indexOf(c) < 0){ s.getRange(1, s.getLastColumn()+1).setValue(c); head.push(c); }
+  });
+}
+
+// ===== SETUP (รัน 1 ครั้ง) =====
+function setup(){
+  Object.keys(HEADERS).forEach(function(name){
+    var s = sh(name);
+    if(!s) s = ss().insertSheet(name);
+    if(s.getLastRow() === 0){ s.getRange(1,1,1,HEADERS[name].length).setValues([HEADERS[name]]); }
+  });
+  return 'setup done';
+}
+
+// ===== TICKET NO =====
+function ticketNo(){
+  var ym = Utilities.formatDate(new Date(), TZ, 'yyyyMM');
+  var prefix = 'HRC-' + ym + '-';
+  var n = getRows(SHEETS.REQ).filter(function(r){ return String(r.ticket_no).indexOf(prefix) === 0; }).length + 1;
+  return prefix + ('000' + n).slice(-3);
+}
+function logStatus(ticket, from, to, actor, note){
+  appendObj(SHEETS.LOG, { id: uuid(), ticket_no: ticket, from_status: from||'', to_status: to||'',
+    actor: actor||'', note: note||'', created_at: now() });
+}
+
+// ===== API ROUTER =====
+function json(o){ return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
+function doGet(e){ e = e || {}; return route((e.parameter||{}).action, e.parameter||{}); }
+function doPost(e){
+  var b = {};
+  try { b = JSON.parse(e.postData.contents); } catch(_) { b = (e && e.parameter) || {}; }
+  return route(b.action, b);
+}
+function route(action, p){
+  try {
+    var fn = API[action];
+    if(!fn) return json({ ok:false, error:'unknown action: ' + action });
+    return json({ ok:true, data: fn(p||{}) });
+  } catch(err){ return json({ ok:false, error: String(err) }); }
+}
+
+var API = {
+  ping: function(){ return { pong: now() }; },
+  me: function(p){
+    var u = getRows(SHEETS.EMP).filter(function(r){ return r.line_user_id === p.line_user_id; })[0];
+    return u || { role: 'requester', unknown: true };
+  },
+  vehicles: function(){ return getRows(SHEETS.VEH).map(strip); },
+  vehicle_history: function(p){
+    return getRows(SHEETS.HIST)
+      .filter(function(r){ return r.vehicle_key === p.vehicle_key; })
+      .sort(function(a,b){ return String(b['วันที่ซ่อม']).localeCompare(String(a['วันที่ซ่อม'])); })
+      .map(strip);
+  },
+  vehicle_summary: function(p){
+    var rows = getRows(SHEETS.HIST).filter(function(r){ return r.vehicle_key === p.vehicle_key; });
+    var total = rows.reduce(function(s,r){ return s + (Number(r['จำนวนเงิน'])||0); }, 0);
+    var last = rows.sort(function(a,b){ return String(b['วันที่ซ่อม']).localeCompare(String(a['วันที่ซ่อม'])); })[0] || null;
+    return { times: rows.length, total: total, last: last ? strip(last) : null };
+  },
+  submit_request: function(p){
+    var t = ticketNo();
+    var rec = { ticket_no: t, status: 'submitted', reported_at: now(), created_at: now(), updated_at: now() };
+    HEADERS.Requests.forEach(function(h){ if(p[h] !== undefined) rec[h] = p[h]; });
+    rec.ticket_no = t; rec.status = 'submitted';
+    appendObj(SHEETS.REQ, rec);
+    logStatus(t, '', 'submitted', p.requester_id || '', '');
+    return { ticket_no: t };
+  },
+  pending_approvals: function(){
+    return getRows(SHEETS.REQ).filter(function(r){ return r.status === 'pending_approval'; }).map(strip);
+  },
+  requests: function(p){
+    var rows = getRows(SHEETS.REQ);
+    if(p.status){ var set = String(p.status).split(','); rows = rows.filter(function(r){ return set.indexOf(String(r.status)) >= 0; }); }
+    if(p.requester){ rows = rows.filter(function(r){ return r.requester_id === p.requester; }); }
+    return rows.sort(function(a,b){ return String(b.created_at).localeCompare(String(a.created_at)); }).map(strip);
+  },
+  todo_users: function(){
+    var c = sbProps(); if(!c.url || !c.key) return [];
+    var r = UrlFetchApp.fetch(c.url + '/rest/v1/users?select=id,display_name,line_user_id&order=display_name', { headers: sbHeaders(c.key), muteHttpExceptions:true });
+    var arr = JSON.parse(r.getContentText() || '[]'); return Array.isArray(arr) ? arr : [];
+  },
+  assign: function(p){
+    ensureReqCols();
+    var cur = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === p.ticket_no; })[0];
+    patchByTicket(SHEETS.REQ, p.ticket_no, { assignee_id: p.assignee_id||'', assignee_name: p.assignee_name||'', technician1: p.assignee_name||'', status:'pending_approval', updated_at: now() });
+    logStatus(p.ticket_no, cur?cur.status:'', 'pending_approval', p.actor||'admin', 'มอบหมาย ' + (p.assignee_name||''));
+    notifyApprovers('📋 มีใบแจ้งซ่อมรออนุมัติ: ' + p.ticket_no);
+    return { ok:true };
+  },
+  logs: function(p){
+    return getRows(SHEETS.LOG).filter(function(r){ return r.ticket_no === p.ticket_no; })
+      .sort(function(a,b){ return String(a.created_at).localeCompare(String(b.created_at)); }).map(strip);
+  },
+  set_status: function(p){
+    var cur = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === p.ticket_no; })[0];
+    patchByTicket(SHEETS.REQ, p.ticket_no, { status: p.status, updated_at: now() });
+    logStatus(p.ticket_no, cur ? cur.status : '', p.status, p.actor || '', p.note || '');
+    return { ok:true };
+  },
+  approve: function(p){
+    var cur = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === p.ticket_no; })[0];
+    if(!cur) throw 'ticket not found';
+    patchByTicket(SHEETS.REQ, p.ticket_no, { status:'approved', approved_at: now(), approver_id: p.approver_line_id||'', updated_at: now() });
+    logStatus(p.ticket_no, cur.status, 'approved', p.approver_line_id||'', '');
+    // ส่งงานเข้า to-do เฉพาะ "ซ่อมใน" (ช่างภายใน) — ซ่อมนอกแค่เดินเรื่องเบิก
+    var task = { skipped: 'ซ่อมนอก - ไม่สร้าง task' };
+    if(cur.repair_by === 'internal'){
+      task = createTodoTask({
+        ticket_no: p.ticket_no,
+        title: 'ซ่อม ' + (cur.machine_name || cur.vehicle_key || '') + ' · ' + p.ticket_no,
+        description: cur.symptom || cur.fix_detail || '',
+        priority: 'medium',
+        assignee_id: cur.assignee_id || '',
+        assignee_line_id: p.assignee_line_id || '',
+        due_date: cur.due_date || ''
+      });
+    }
+    var pdfUrl='';
+    try{ pdfUrl = genPdf(p.ticket_no); }catch(e){ pdfUrl = 'PDF error: ' + e; }
+    linePush(cur.requester_id, '✅ ใบแจ้งซ่อม ' + p.ticket_no + ' ได้รับการอนุมัติแล้ว');
+    return { ok:true, todo: task, pdf_url: pdfUrl };
+  },
+  gen_pdf: function(p){ return { pdf_url: genPdf(p.ticket_no) }; },
+  reject: function(p){
+    var cur = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === p.ticket_no; })[0];
+    patchByTicket(SHEETS.REQ, p.ticket_no, { status:'rejected', rejected_reason: p.reason||'', updated_at: now() });
+    logStatus(p.ticket_no, cur?cur.status:'', 'rejected', p.approver_line_id||'', p.reason||'');
+    if(cur) linePush(cur.requester_id, '❌ ใบแจ้งซ่อม ' + p.ticket_no + ' ไม่ได้รับการอนุมัติ' + (p.reason?(' · '+p.reason):''));
+    return { ok:true };
+  },
+  // แก้ไข/เติมรายละเอียดใบแจ้งซ่อม (แอดมิน) — เติมข้อมูลก่อนออก PDF
+  edit_request: function(p){
+    var allow=['symptom','cause','cause_type','fix_detail','prevention','amount','mileage','service_interval_km','vendor','machine_code','machine_name','department','requester_name','due_date','receipt_no','contamination'];
+    var patch={ updated_at: now() };
+    allow.forEach(function(k){ if(p[k]!==undefined) patch[k]=p[k]; });
+    patchByTicket(SHEETS.REQ, p.ticket_no, patch);
+    logStatus(p.ticket_no, '', '', p.actor||'admin', 'แก้ไขข้อมูลใบแจ้งซ่อม');
+    return { ok:true };
+  },
+  // แนบบิล/ใบเสร็จ (รูป base64) -> เก็บใน Drive -> ต่อ url เข้า receipt_urls
+  upload_receipt: function(p){
+    var folder = getReceiptFolder();
+    var blob = Utilities.newBlob(Utilities.base64Decode(p.data), p.mime||'image/jpeg', p.filename||('receipt_'+p.ticket_no+'_'+uuid().slice(0,8)+'.jpg'));
+    var file = folder.createFile(blob);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    var url = 'https://drive.google.com/file/d/' + file.getId() + '/view';
+    var cur = getRows(SHEETS.REQ).filter(function(x){ return x.ticket_no === p.ticket_no; })[0];
+    var urls = (cur && cur.receipt_urls ? String(cur.receipt_urls) + ' , ' : '') + url;
+    patchByTicket(SHEETS.REQ, p.ticket_no, { receipt_urls: urls, updated_at: now() });
+    return { ok:true, url:url };
+  },
+  // ===== auth / register — นิยามใน 05_gas_auth.gs =====
+  request_otp:  function(p){ return authRequestOtp(p); },
+  verify_otp:   function(p){ return authVerifyOtp(p); },
+  set_pin:      function(p){ return authSetPin(p); },
+  login_token:  function(p){ return authLoginToken(p); },
+  login_pin:    function(p){ return authLoginPin(p); },
+  reg_lookup:   function(p){ return regLookup(p); },
+  reg_submit:   function(p){ return regSubmit(p); },
+  pending_users:function(p){ return pendingUsers(p); },
+  approve_user: function(p){ return approveUser(p); },
+  reject_user:  function(p){ return rejectUser(p); }
+};
+function strip(o){ var c={}; for(var k in o){ if(k!=='_row') c[k]=o[k]; } return c; }
+
+// ===== INTEGRATION: ssb-maintenance <-> Job to-do (Supabase) =====
+// ตั้งค่าใน Project Settings → Script Properties:
+//   SUPABASE_URL          = https://xxxx.supabase.co
+//   SUPABASE_SERVICE_KEY  = <service_role key>   (ห้ามใส่ในโค้ด/ฝั่ง client)
+//   TODO_PROJECT_ID       = <uuid ของโปรเจค "งานซ่อม">
+function sbProps(){
+  var P = PropertiesService.getScriptProperties();
+  return { url:P.getProperty('SUPABASE_URL'), key:P.getProperty('SUPABASE_SERVICE_KEY'), proj:P.getProperty('TODO_PROJECT_ID') };
+}
+function sbHeaders(key){ return { apikey:key, Authorization:'Bearer '+key }; }
+
+// ===== LINE push แจ้งเตือน (ผ่าน OA Messaging API) — ตั้ง Script Property: LINE_PUSH_TOKEN =====
+function linePush(to, text){
+  var tk = PropertiesService.getScriptProperties().getProperty('LINE_PUSH_TOKEN');
+  if(!tk || !to) return;
+  try{
+    UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {
+      method:'post', contentType:'application/json',
+      headers:{ Authorization:'Bearer '+tk },
+      payload: JSON.stringify({ to:String(to), messages:[{ type:'text', text:String(text).slice(0,4900) }] }),
+      muteHttpExceptions:true
+    });
+  }catch(e){}
+}
+function notifyAdmins(text){
+  getRows(SHEETS.EMP).filter(function(r){ return /admin/i.test(String(r.role||'')) && r.line_user_id && String(r.active)==='true'; })
+    .forEach(function(a){ linePush(a.line_user_id, text); });
+}
+function notifyApprovers(text){
+  getRows(SHEETS.EMP).filter(function(r){ return /approv|exec|manager|บริหาร/i.test(String(r.role||'')) && r.line_user_id && String(r.active)==='true'; })
+    .forEach(function(a){ linePush(a.line_user_id, text); });
+}
+
+function createTodoTask(req){
+  var c = sbProps();
+  if(!c.url || !c.key || !c.proj) return { skipped:'no supabase config' };
+  var assignee = req.assignee_id || null;
+  if(!assignee && req.assignee_line_id){
+    var r = UrlFetchApp.fetch(c.url + '/rest/v1/users?select=id&line_user_id=eq.' + encodeURIComponent(req.assignee_line_id),
+      { headers: sbHeaders(c.key), muteHttpExceptions:true });
+    var arr = JSON.parse(r.getContentText() || '[]');
+    if(arr[0]) assignee = arr[0].id;
+  }
+  var body = { project_id:c.proj, title:req.title, description:req.description||'',
+    priority:req.priority||'medium', assignee_id:assignee, due_date:req.due_date||null,
+    external_ref:'ssb:'+req.ticket_no };
+  var res = UrlFetchApp.fetch(c.url + '/rest/v1/tasks',
+    { method:'post', contentType:'application/json',
+      headers: { apikey:c.key, Authorization:'Bearer '+c.key, Prefer:'return=representation' },
+      payload: JSON.stringify(body), muteHttpExceptions:true });
+  return JSON.parse(res.getContentText() || '{}');
+}
+
+// ตั้ง time-driven trigger เรียกทุก 5-10 นาที: task เสร็จใน to-do -> ปิดใบแจ้งซ่อม
+function pollTodoDone(){
+  var c = sbProps();
+  if(!c.url || !c.key) return;
+  var P = PropertiesService.getScriptProperties();
+  var last = P.getProperty('TODO_LAST_POLL') || '1970-01-01T00:00:00Z';
+  var q = c.url + '/rest/v1/tasks?select=external_ref,updated_at,status&status=eq.done&external_ref=like.ssb:*&updated_at=gt.' + encodeURIComponent(last);
+  var r = UrlFetchApp.fetch(q, { headers: sbHeaders(c.key), muteHttpExceptions:true });
+  var tasks = JSON.parse(r.getContentText() || '[]');
+  if(!tasks.length) return;
+  var maxTs = last;
+  tasks.forEach(function(t){
+    var ticket = String(t.external_ref).replace(/^ssb:/, '');
+    patchByTicket(SHEETS.REQ, ticket, { status:'done', repair_finish: now(), updated_at: now() });
+    logStatus(ticket, '', 'done', 'todo-sync', 'งานเสร็จจากระบบ to-do');
+    if(t.updated_at > maxTs) maxTs = t.updated_at;
+  });
+  P.setProperty('TODO_LAST_POLL', maxTs);
+}
+
+// ทดสอบเชื่อม to-do (รันหลังใส่ Script Properties แล้ว) — สร้าง task ทดสอบ 1 อัน
+function testTodo(){
+  var r = getRows(SHEETS.REQ)[0];
+  if(!r){ Logger.log('ไม่มีใบแจ้งซ่อม'); return; }
+  var res = createTodoTask({ ticket_no:r.ticket_no, title:'[ทดสอบ] ซ่อม '+r.ticket_no, description:'ทดสอบเชื่อม ssb-maintenance', priority:'medium', assignee_line_id:'', due_date:'' });
+  Logger.log(JSON.stringify(res));
+  return res;
+}
