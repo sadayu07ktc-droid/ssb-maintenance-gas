@@ -76,6 +76,13 @@ function genPdf(ticketNo){
   Object.keys(map).forEach(function(k){ tmp.createTextFinder('{{' + k + '}}').replaceAllWith(String(map[k])); });
   SpreadsheetApp.flush();
 
+  // ล้าง rich-text ที่ import จาก Excel + ตั้งขนาดฟอนต์ช่องค่าให้เท่ากัน (กันฟอนต์เพี้ยน)
+  var VAL_FONT = 11;
+  ['G3','M3','R3','G4','N4','H5','N5','E7','K7','E8','E9','E10','B14','M14','S14','B16','B22'].forEach(function(a1){
+    try{ var c = tmp.getRange(a1); c.setValue(String(c.getValue()==null?'':c.getValue())); c.setFontSize(VAL_FONT).setFontFamily('Sarabun'); }catch(e){}
+  });
+  SpreadsheetApp.flush();
+
   // export แท็บนั้นเป็น PDF (ขนาด/ฟอนต์ = ตามที่จัดในแท็บ FormTemplate เป๊ะ ไม่มีโค้ดทับ)
   var url = 'https://docs.google.com/spreadsheets/d/' + ss.getId() + '/export?format=pdf'
     + '&gid=' + tmp.getSheetId()
