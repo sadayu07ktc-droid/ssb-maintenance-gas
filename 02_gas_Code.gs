@@ -238,6 +238,27 @@ var API = {
     patchByTicket(SHEETS.REQ, p.ticket_no, { receipt_urls: urls, updated_at: now() });
     return { ok:true, url:url };
   },
+  // แนบไฟล์ (รูป) เข้ารายการประวัติซ่อม (MaintenanceRecords) อ้างอิงด้วย id
+  hist_attach: function(p){
+    var s = sh(SHEETS.HIST);
+    var head = s.getRange(1,1,1,s.getLastColumn()).getValues()[0];
+    if(head.indexOf('ไฟล์แนบ') < 0){ s.getRange(1, s.getLastColumn()+1).setValue('ไฟล์แนบ'); head.push('ไฟล์แนบ'); }
+    var folder = getReceiptFolder();
+    var blob = Utilities.newBlob(Utilities.base64Decode(p.data), p.mime||'image/jpeg', p.filename||('hist_'+uuid().slice(0,8)+'.jpg'));
+    var file = folder.createFile(blob);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    var url = 'https://drive.google.com/file/d/' + file.getId() + '/view';
+    var vals = s.getDataRange().getValues();
+    var idcol = head.indexOf('id'), fcol = head.indexOf('ไฟล์แนบ');
+    for(var i=1;i<vals.length;i++){
+      if(String(vals[i][idcol]) === String(p.id)){
+        var all = (vals[i][fcol] ? String(vals[i][fcol]) + ' , ' : '') + url;
+        s.getRange(i+1, fcol+1).setValue(all);
+        return { ok:true, url:url, all:all };
+      }
+    }
+    return { ok:false, error:'ไม่พบรายการ' };
+  },
   // ===== auth / register — นิยามใน 05_gas_auth.gs =====
   request_otp:  function(p){ return authRequestOtp(p); },
   verify_otp:   function(p){ return authVerifyOtp(p); },
