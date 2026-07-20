@@ -166,6 +166,7 @@ var API = {
     var rows = getRows(SHEETS.REQ);
     if(p.status){ var set = String(p.status).split(','); rows = rows.filter(function(r){ return set.indexOf(String(r.status)) >= 0; }); }
     if(p.requester){ rows = rows.filter(function(r){ return r.requester_id === p.requester; }); }
+    if(p.ticket_no){ rows = rows.filter(function(r){ return String(r.ticket_no) === String(p.ticket_no); }); }
     return rows.sort(function(a,b){ return String(b.created_at).localeCompare(String(a.created_at)); }).map(strip);
   },
   todo_users: function(){
