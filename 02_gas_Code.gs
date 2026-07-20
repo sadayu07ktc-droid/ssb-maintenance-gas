@@ -183,6 +183,7 @@ var API = {
         description: cur.symptom || '',
         priority: 'medium',
         assignee_id: p.assignee_id || '',
+        creator_line_id: cur.requester_id || '',
         due_date: cur.due_date || ''
       });
       return { ok:true, todo: task, flow:'building' };
@@ -226,6 +227,7 @@ var API = {
         priority: 'medium',
         assignee_id: cur.assignee_id || '',
         assignee_line_id: p.assignee_line_id || '',
+        creator_line_id: cur.requester_id || '',
         due_date: cur.due_date || ''
       });
     }
@@ -341,8 +343,16 @@ function createTodoTask(req){
     var arr = JSON.parse(r.getContentText() || '[]');
     if(arr[0]) assignee = arr[0].id;
   }
+  // ผู้สร้างงาน = ผู้แจ้ง (map line_user_id -> users.id ของ to-do)
+  var creator = req.creator_id || null;
+  if(!creator && req.creator_line_id){
+    var rc = UrlFetchApp.fetch(c.url + '/rest/v1/users?select=id&line_user_id=eq.' + encodeURIComponent(req.creator_line_id),
+      { headers: sbHeaders(c.key), muteHttpExceptions:true });
+    var ac = JSON.parse(rc.getContentText() || '[]');
+    if(ac[0]) creator = ac[0].id;
+  }
   var body = { project_id:c.proj, title:req.title, description:req.description||'',
-    priority:req.priority||'medium', assignee_id:assignee, due_date:req.due_date||null,
+    priority:req.priority||'medium', assignee_id:assignee, created_by:creator, due_date:req.due_date||null,
     external_ref:'ssb:'+req.ticket_no };
   var res = UrlFetchApp.fetch(c.url + '/rest/v1/tasks',
     { method:'post', contentType:'application/json',
