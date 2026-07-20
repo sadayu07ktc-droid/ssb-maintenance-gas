@@ -36,6 +36,43 @@ function getReceiptFolder(){
 function ss(){ return SpreadsheetApp.getActiveSpreadsheet(); }
 function sh(name){ return ss().getSheetByName(name); }
 function now(){ return Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm:ss'); }
+
+/**
+ * ลงประวัติซ่อมรถ (MaintenanceRecords) โดยอ้างอิงด้วย "เลขที่ใบแจ้งซ่อม" กัน record ซ้ำ
+ * create=true  -> เขียนแถวใหม่ถ้ายังไม่มี (ใช้ตอน "อนุมัติ" เท่านั้น)
+ * create=false -> อัปเดตแถวเดิมอย่างเดียว (แก้ไขข้อมูล / แนบบิลทีหลัง) ใบที่ยังไม่อนุมัติจะไม่ถูกบันทึก
+ */
+function syncHistory(ticketNo, create){
+  var r = getRows(SHEETS.REQ).filter(function(x){ return x.ticket_no === ticketNo; })[0];
+  if(!r || !r.vehicle_key) return;   // ชีตนี้เก็บประวัติของรถเท่านั้น
+  var veh = getRows(SHEETS.VEH).filter(function(v){ return v.vehicle_key === r.vehicle_key; })[0] || {};
+  var s = sh(SHEETS.HIST);
+  var head = s.getRange(1, 1, 1, s.getLastColumn()).getValues()[0];
+  var tcol = head.indexOf('เลขที่ใบแจ้งซ่อม');
+  if(tcol < 0) return;
+  var vals = s.getDataRange().getValues();
+  var row = -1;
+  for(var i = 1; i < vals.length; i++){ if(String(vals[i][tcol]) === String(ticketNo)){ row = i + 1; break; } }
+  if(row < 0 && !create) return;
+
+  var data = {
+    'vehicle_key':      r.vehicle_key,
+    'ทะเบียนรถ':        veh.plate_current || '',
+    'plate_type':       veh.plate_type || '',
+    'วันที่ซ่อม':        String(r.approved_at || now()).slice(0, 10),
+    'เลขที่ใบแจ้งซ่อม':  ticketNo,
+    'ระยะเช็ค_กม':      r.service_interval_km || '',
+    'เลขไมล์':          r.mileage || '',
+    'รายการซ่อม':       r.fix_detail || r.symptom || '',
+    'จำนวนเงิน':        r.amount || '',
+    'ไฟล์แนบ':          r.receipt_urls || ''
+  };
+  if(row < 0){ row = s.getLastRow() + 1; data.id = uuid(); }
+  Object.keys(data).forEach(function(k){
+    var c = head.indexOf(k);
+    if(c >= 0) s.getRange(row, c + 1).setValue(data[k]);
+  });
+}
 function uuid(){ return Utilities.getUuid(); }
 
 function getRows(name){
@@ -239,12 +276,21 @@ var API = {
         due_date: cur.due_date || ''
       });
     }
+    try{ syncHistory(p.ticket_no, true); }catch(e){}   // ลงประวัติซ่อม (เฉพาะตอนอนุมัติเท่านั้น)
     var pdfUrl='';
     try{ pdfUrl = genPdf(p.ticket_no); }catch(e){ pdfUrl = 'PDF error: ' + e; }
     linePush(cur.requester_id, '✅ ใบแจ้งซ่อม ' + p.ticket_no + ' ได้รับการอนุมัติแล้ว');
     return { ok:true, todo: task, pdf_url: pdfUrl };
   },
   gen_pdf: function(p){ return { pdf_url: genPdf(p.ticket_no) }; },
+  // เขียน/อัปเดตประวัติย้อนหลังให้ใบที่อนุมัติไปแล้ว (รันครั้งเดียวจากแอดมิน)
+  backfill_history: function(){
+    var n = 0;
+    getRows(SHEETS.REQ).forEach(function(r){
+      if(r.vehicle_key && r.approved_at){ try{ syncHistory(r.ticket_no, true); n++; }catch(e){} }
+    });
+    return { ok:true, synced:n };
+  },
   reject: function(p){
     var cur = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === p.ticket_no; })[0];
     patchByTicket(SHEETS.REQ, p.ticket_no, { status:'rejected', rejected_reason: p.reason||'', updated_at: now() });
@@ -259,6 +305,7 @@ var API = {
     allow.forEach(function(k){ if(p[k]!==undefined) patch[k]=p[k]; });
     patchByTicket(SHEETS.REQ, p.ticket_no, patch);
     logStatus(p.ticket_no, '', '', p.actor||'admin', 'แก้ไขข้อมูลใบแจ้งซ่อม');
+    try{ syncHistory(p.ticket_no, false); }catch(e){}  // อัปเดตแถวประวัติเดิม (ถ้าอนุมัติแล้ว)
     return { ok:true };
   },
   // แนบบิล/ใบเสร็จ (รูป base64) -> เก็บใน Drive -> ต่อ url เข้า receipt_urls
@@ -271,6 +318,7 @@ var API = {
     var cur = getRows(SHEETS.REQ).filter(function(x){ return x.ticket_no === p.ticket_no; })[0];
     var urls = (cur && cur.receipt_urls ? String(cur.receipt_urls) + ' , ' : '') + url;
     patchByTicket(SHEETS.REQ, p.ticket_no, { receipt_urls: urls, updated_at: now() });
+    try{ syncHistory(p.ticket_no, false); }catch(e){}  // บิลที่แนบทีหลัง -> เข้าช่อง "ไฟล์แนบ" ของประวัติ
     return { ok:true, url:url };
   },
   // แนบไฟล์ (รูป) เข้ารายการประวัติซ่อม (MaintenanceRecords) อ้างอิงด้วย id

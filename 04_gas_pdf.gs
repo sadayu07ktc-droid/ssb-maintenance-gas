@@ -59,7 +59,8 @@ function genPdf(ticketNo){
     'ซ่อมนอก':      chk(r.repair_by,'external'),
     'อู่':          r.vendor ? ('(' + r.vendor + ')') : '',
     'วันที่อนุมัติ': ddmmyyyy(r.approved_at),
-    'รหัส':         isVeh ? (veh ? veh.plate_current : r.vehicle_key) : (r.machine_code || ''),
+    'รหัส':         isVeh ? (veh ? veh.plate_current : r.vehicle_key)
+                          : (String(r.asset_category) === 'building' && r.machine_code ? ('ห้อง ' + r.machine_code) : (r.machine_code || '')),
     'ชื่อเครื่อง':   isVeh ? (veh ? veh['ยี่ห้อ_รุ่น'] : '') : (r.machine_name || ''),
     'ประเภทคำขอ':   kindLine(r.request_kind),
     'ประเภทงาน':    catLine(r.asset_category),
