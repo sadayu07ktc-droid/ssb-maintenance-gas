@@ -41,7 +41,9 @@ function genPdf(ticketNo){
     if(r.vendor) extra.push('ศูนย์/อู่ ' + r.vendor);
     if(extra.length) sym = (sym ? sym + '  ' : '') + '[' + extra.join(' · ') + ']';
   }
-  if(r.amount) sym += '   จำนวนเงิน ' + money(r.amount) + ' บาท';
+  // จำนวนเงิน -> ต่อท้ายช่อง "การแก้ไข" (ไม่ใช่ช่องอาการ)
+  var fix = r.fix_detail || '';
+  if(r.amount) fix += (fix ? '   ' : '') + 'จำนวนเงิน ' + money(r.amount) + ' บาท';
 
   var apprvName = r.approver_id ? empNameByLine(r.approver_id) : '';
   var apprv = apprvName + (r.approved_at ? ('   ✔ ' + ddmmyyyy(r.approved_at)) : '   (รออนุมัติ)');
@@ -65,7 +67,7 @@ function genPdf(ticketNo){
     'ผู้แจ้งเซ็น':   r.requester_name || '',
     'ผู้อนุมัติ':    apprv,
     'สาเหตุ':       r.cause || '',
-    'การแก้ไข':     r.fix_detail || ''
+    'การแก้ไข':     fix
   };
 
   // copy แท็บ -> แทนค่า
