@@ -171,9 +171,34 @@ var API = {
   assign: function(p){
     ensureReqCols();
     var cur = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === p.ticket_no; })[0];
-    patchByTicket(SHEETS.REQ, p.ticket_no, { assignee_id: p.assignee_id||'', assignee_name: p.assignee_name||'', technician1: p.assignee_name||'', status:'pending_approval', updated_at: now() });
+    var base = { assignee_id: p.assignee_id||'', assignee_name: p.assignee_name||'', technician1: p.assignee_name||'', updated_at: now() };
+    // อาคาร-สถานที่: มอบหมาย -> ส่งให้ผู้รับผิดชอบทำงานเลย (อนุมัติทีหลังตอนงานเสร็จ)
+    if(cur && String(cur.asset_category) === 'building'){
+      base.status = 'in_progress';
+      patchByTicket(SHEETS.REQ, p.ticket_no, base);
+      logStatus(p.ticket_no, cur.status, 'in_progress', p.actor||'admin', 'มอบหมาย ' + (p.assignee_name||'') + ' → ส่งให้ผู้รับผิดชอบ');
+      var task = createTodoTask({
+        ticket_no: p.ticket_no,
+        title: 'ซ่อม ' + (cur.machine_name || cur.machine_code || '') + ' · ' + p.ticket_no,
+        description: cur.symptom || '',
+        priority: 'medium',
+        assignee_id: p.assignee_id || '',
+        due_date: cur.due_date || ''
+      });
+      return { ok:true, todo: task, flow:'building' };
+    }
+    base.status = 'pending_approval';
+    patchByTicket(SHEETS.REQ, p.ticket_no, base);
     logStatus(p.ticket_no, cur?cur.status:'', 'pending_approval', p.actor||'admin', 'มอบหมาย ' + (p.assignee_name||''));
     notifyApprovers('📋 มีใบแจ้งซ่อมรออนุมัติ: ' + p.ticket_no);
+    return { ok:true };
+  },
+  // แอดมินตรวจงานเสร็จแล้ว -> ส่งให้ผู้อนุมัติ (ขั้นตอนสุดท้ายของ flow อาคาร-สถานที่)
+  send_approval: function(p){
+    var cur = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === p.ticket_no; })[0];
+    patchByTicket(SHEETS.REQ, p.ticket_no, { status:'pending_approval', reviewed_by: p.actor||'', reviewed_at: now(), updated_at: now() });
+    logStatus(p.ticket_no, cur?cur.status:'', 'pending_approval', p.actor||'admin', 'แอดมินตรวจงานแล้ว → ส่งอนุมัติ');
+    notifyApprovers('📋 ตรวจงานแล้ว รออนุมัติ: ' + p.ticket_no);
     return { ok:true };
   },
   logs: function(p){
@@ -192,8 +217,8 @@ var API = {
     patchByTicket(SHEETS.REQ, p.ticket_no, { status:'approved', approved_at: now(), approver_id: p.approver_line_id||'', updated_at: now() });
     logStatus(p.ticket_no, cur.status, 'approved', p.approver_line_id||'', '');
     // ส่งงานเข้า to-do เฉพาะ "ซ่อมใน" (ช่างภายใน) — ซ่อมนอกแค่เดินเรื่องเบิก
-    var task = { skipped: 'ซ่อมนอก - ไม่สร้าง task' };
-    if(cur.repair_by === 'internal'){
+    var task = { skipped: 'ไม่สร้าง task (ซ่อมนอก หรือ อาคาร-สถานที่ที่สร้างตอนมอบหมายแล้ว)' };
+    if(cur.repair_by === 'internal' && String(cur.asset_category) !== 'building'){
       task = createTodoTask({
         ticket_no: p.ticket_no,
         title: 'ซ่อม ' + (cur.machine_name || cur.vehicle_key || '') + ' · ' + p.ticket_no,
@@ -341,6 +366,7 @@ function pollTodoDone(){
     var ticket = String(t.external_ref).replace(/^ssb:/, '');
     patchByTicket(SHEETS.REQ, ticket, { status:'done', repair_finish: now(), updated_at: now() });
     logStatus(ticket, '', 'done', 'todo-sync', 'งานเสร็จจากระบบ to-do');
+    notifyAdmins('🔧 งานเสร็จแล้ว รอแอดมินตรวจ: ' + ticket);
     if(t.updated_at > maxTs) maxTs = t.updated_at;
   });
   P.setProperty('TODO_LAST_POLL', maxTs);
