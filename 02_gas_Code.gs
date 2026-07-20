@@ -147,12 +147,17 @@ var API = {
   },
   submit_request: function(p){
     var t = ticketNo();
-    var rec = { ticket_no: t, status: 'submitted', reported_at: now(), created_at: now(), updated_at: now() };
+    var rec = { ticket_no: t, reported_at: now(), created_at: now(), updated_at: now() };
     HEADERS.Requests.forEach(function(h){ if(p[h] !== undefined) rec[h] = p[h]; });
-    rec.ticket_no = t; rec.status = 'submitted';
+    rec.ticket_no = t;
+    // แอดมินแจ้งเอง + ไม่ใช่งานอาคาร -> ส่งให้ผู้อนุมัติเลย (ไม่ต้องผ่านแอดมินตรวจซ้ำ)
+    var emp = getRows(SHEETS.EMP).filter(function(r){ return String(r.line_user_id) === String(p.requester_id); })[0];
+    var byAdmin = emp && /admin/i.test(String(emp.role||''));
+    rec.status = (byAdmin && String(p.asset_category) !== 'building') ? 'pending_approval' : 'submitted';
     appendObj(SHEETS.REQ, rec);
-    logStatus(t, '', 'submitted', p.requester_id || '', '');
-    return { ticket_no: t };
+    logStatus(t, '', rec.status, p.requester_id || '', byAdmin ? 'แอดมินแจ้งเอง → ส่งอนุมัติเลย' : '');
+    if(rec.status === 'pending_approval') notifyApprovers('📋 มีใบแจ้งซ่อมรออนุมัติ: ' + t);
+    return { ticket_no: t, status: rec.status };
   },
   pending_approvals: function(){
     return getRows(SHEETS.REQ).filter(function(r){ return r.status === 'pending_approval'; }).map(strip);
@@ -198,7 +203,9 @@ var API = {
   send_approval: function(p){
     var cur = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === p.ticket_no; })[0];
     patchByTicket(SHEETS.REQ, p.ticket_no, { status:'pending_approval', reviewed_by: p.actor||'', reviewed_at: now(), updated_at: now() });
-    logStatus(p.ticket_no, cur?cur.status:'', 'pending_approval', p.actor||'admin', 'แอดมินตรวจงานแล้ว → ส่งอนุมัติ');
+    var prev = cur ? String(cur.status) : '';
+    logStatus(p.ticket_no, prev, 'pending_approval', p.actor||'admin',
+      prev === 'done' ? 'แอดมินตรวจงานแล้ว → ส่งอนุมัติ' : 'แอดมินตรวจข้อมูลแล้ว → ส่งอนุมัติ');
     notifyApprovers('📋 ตรวจงานแล้ว รออนุมัติ: ' + p.ticket_no);
     return { ok:true };
   },
