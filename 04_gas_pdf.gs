@@ -14,11 +14,35 @@ function chk(v, on){ return String(v) === on ? '●' : '○'; }  // วงกล
 // โฟลเดอร์เก็บรูปลายเซ็น (ตั้งชื่อไฟล์ = ชื่อพนักงาน หรือ รหัสพนักงาน)
 var SIGN_FOLDER_NAMES = ['ลายเซ็นต์ผู้อนุมัติ','ลายเซ็นผู้อนุมัติ','signatures'];
 function getSignFolder(){
+  // 1) ระบุ ID ตรงๆ ใน Script Property 'SIGN_FOLDER_ID' (ชัวร์สุด ใช้ได้กับ Shared drive ด้วย)
+  var id = PropertiesService.getScriptProperties().getProperty('SIGN_FOLDER_ID');
+  if(id){ try{ return DriveApp.getFolderById(id); }catch(e){} }
+  // 2) ชื่อตรงเป๊ะ
   for(var i=0;i<SIGN_FOLDER_NAMES.length;i++){
     var it = DriveApp.getFoldersByName(SIGN_FOLDER_NAMES[i]);
     if(it.hasNext()) return it.next();
   }
+  // 3) ชื่อใกล้เคียง (เผื่อสะกด/เว้นวรรคต่างกัน)
+  var s = DriveApp.searchFolders('title contains "ลายเซ" and trashed = false');
+  if(s.hasNext()) return s.next();
   return null;
+}
+/** วางรูปลายเซ็นให้พอดีช่อง (รองรับเซลล์ที่ merge) */
+function placeSign(tmp, blob, a1){
+  var rng = tmp.getRange(a1);
+  var m = rng.getMergedRanges()[0] || rng;
+  var w = 0, h = 0, c, r;
+  for(c = m.getColumn(); c < m.getColumn() + m.getNumColumns(); c++) w += tmp.getColumnWidth(c);
+  for(r = m.getRow();    r < m.getRow()    + m.getNumRows();    r++) h += tmp.getRowHeight(r);
+  var img = tmp.insertImage(blob, m.getColumn(), m.getRow());
+  var iw = img.getWidth(), ih = img.getHeight();
+  var maxW = Math.max(w - 12, 40), maxH = Math.max(h - 4, 26);
+  var s = Math.min(maxW / iw, maxH / ih);
+  var nw = Math.round(iw * s), nh = Math.round(ih * s);
+  img.setWidth(nw).setHeight(nh);
+  img.setAnchorCellXOffset(Math.round((w - nw) / 2));
+  img.setAnchorCellYOffset(Math.round(Math.max((h - nh) / 2, 0)));
+  return img;
 }
 /** หารูปลายเซ็นของ line_user_id นี้ · จับคู่ด้วยชื่อไฟล์ = full_name หรือ emp_code */
 function signBlobByLine(lid){
@@ -114,6 +138,17 @@ function genPdf(ticketNo){
     try{ var c = tmp.getRange(a1); c.setValue(String(c.getValue()==null?'':c.getValue())); c.setFontSize(VAL_FONT).setFontFamily('Sarabun'); }catch(e){}
   });
   SpreadsheetApp.flush();
+
+  // ลายเซ็นผู้อนุมัติ -> ช่อง "ผู้อนุมัติ" ท่อนล่าง (F37) + วันที่ (O37) · ใส่เมื่ออนุมัติแล้วเท่านั้น
+  if(r.approved_at && r.approver_id){
+    try{
+      var sig = signBlobByLine(r.approver_id);
+      if(sig) placeSign(tmp, sig, 'F37');
+      else    tmp.getRange('F37').setValue(apprvName);   // ไม่มีรูป -> พิมพ์ชื่อแทน
+      tmp.getRange('O37').setValue(ddmmyyyy(r.approved_at));
+      SpreadsheetApp.flush();
+    }catch(e){}
+  }
 
   // export แท็บนั้นเป็น PDF (ขนาด/ฟอนต์ = ตามที่จัดในแท็บ FormTemplate เป๊ะ ไม่มีโค้ดทับ)
   var url = 'https://docs.google.com/spreadsheets/d/' + ss.getId() + '/export?format=pdf'

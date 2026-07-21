@@ -297,7 +297,11 @@ var API = {
   // รายชื่อไฟล์ในโฟลเดอร์ลายเซ็น (ใช้ตรวจว่าตั้งชื่อไฟล์ตรงกับพนักงานไหม)
   list_signatures: function(){
     var f = getSignFolder();
-    if(!f) return { error:'ไม่พบโฟลเดอร์ลายเซ็น' };
+    if(!f){
+      var all = DriveApp.getFolders(), cand = [];
+      while(all.hasNext() && cand.length < 80) cand.push(all.next().getName());
+      return { error:'ไม่พบโฟลเดอร์ลายเซ็น', folders_in_drive: cand };
+    }
     var it = f.getFiles(), names = [];
     while(it.hasNext() && names.length < 60) names.push(it.next().getName());
     return { folder: f.getName(), files: names };
