@@ -10,6 +10,35 @@ function getPdfFolder(){
   return it.hasNext() ? it.next() : DriveApp.createFolder('ssb-maintenance-pdf');
 }
 function chk(v, on){ return String(v) === on ? '●' : '○'; }  // วงกลมทึบ=เลือก / โปร่ง=ไม่เลือก
+
+// โฟลเดอร์เก็บรูปลายเซ็น (ตั้งชื่อไฟล์ = ชื่อพนักงาน หรือ รหัสพนักงาน)
+var SIGN_FOLDER_NAMES = ['ลายเซ็นต์ผู้อนุมัติ','ลายเซ็นผู้อนุมัติ','signatures'];
+function getSignFolder(){
+  for(var i=0;i<SIGN_FOLDER_NAMES.length;i++){
+    var it = DriveApp.getFoldersByName(SIGN_FOLDER_NAMES[i]);
+    if(it.hasNext()) return it.next();
+  }
+  return null;
+}
+/** หารูปลายเซ็นของ line_user_id นี้ · จับคู่ด้วยชื่อไฟล์ = full_name หรือ emp_code */
+function signBlobByLine(lid){
+  if(!lid) return null;
+  var e = getRows(SHEETS.EMP).filter(function(r){ return String(r.line_user_id) === String(lid); })[0];
+  if(!e) return null;
+  var folder = getSignFolder(); if(!folder) return null;
+  var keys = [e.full_name, e.emp_code, e.id].filter(function(k){ return k && String(k).trim(); })
+    .map(function(k){ return String(k).trim().toLowerCase(); });
+  var it = folder.getFiles();
+  while(it.hasNext()){
+    var f = it.next();
+    if(String(f.getMimeType()).indexOf('image/') !== 0) continue;
+    var base = f.getName().replace(/\.[^.]+$/, '').trim().toLowerCase();
+    for(var i=0;i<keys.length;i++){
+      if(base === keys[i] || base.indexOf(keys[i]) >= 0 || keys[i].indexOf(base) >= 0) return f.getBlob();
+    }
+  }
+  return null;
+}
 // แปลง line_user_id -> ชื่อพนักงาน (จากแท็บ Employees)
 function empNameByLine(lid){
   if(!lid) return '';

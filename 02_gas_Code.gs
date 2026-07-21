@@ -283,6 +283,25 @@ var API = {
     return { ok:true, todo: task, pdf_url: pdfUrl };
   },
   gen_pdf: function(p){ return { pdf_url: genPdf(p.ticket_no) }; },
+  // อ่านผังเซลล์ของ FormTemplate (ใช้ตอนวางตำแหน่งลายเซ็น) — อ่านอย่างเดียว ไม่แก้ชีต
+  dump_template: function(){
+    var sh2 = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('FormTemplate');
+    if(!sh2) return { error:'ไม่พบแท็บ FormTemplate' };
+    var vals = sh2.getDataRange().getValues(), out = [];
+    for(var i=0;i<vals.length;i++) for(var j=0;j<vals[i].length;j++){
+      var v = String(vals[i][j]).trim();
+      if(v !== '') out.push(sh2.getRange(i+1,j+1).getA1Notation() + ' = ' + v);
+    }
+    return { cells: out, merges: sh2.getDataRange().getMergedRanges().map(function(m){ return m.getA1Notation(); }) };
+  },
+  // รายชื่อไฟล์ในโฟลเดอร์ลายเซ็น (ใช้ตรวจว่าตั้งชื่อไฟล์ตรงกับพนักงานไหม)
+  list_signatures: function(){
+    var f = getSignFolder();
+    if(!f) return { error:'ไม่พบโฟลเดอร์ลายเซ็น' };
+    var it = f.getFiles(), names = [];
+    while(it.hasNext() && names.length < 60) names.push(it.next().getName());
+    return { folder: f.getName(), files: names };
+  },
   // เขียน/อัปเดตประวัติย้อนหลังให้ใบที่อนุมัติไปแล้ว (รันครั้งเดียวจากแอดมิน)
   backfill_history: function(){
     var n = 0;
