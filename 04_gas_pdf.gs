@@ -86,15 +86,12 @@ function ddmmyyyy(d){ var p = String(d||'').slice(0,10).split('-'); return p.len
 function kindLine(v){ return chk(v,'repair')+' ซ่อม   '+chk(v,'replace_part')+' เปลี่ยนอะไหล่   '+chk(v,'inspect')+' ตรวจเช็ค   '+chk(v,'tire')+' เปลี่ยนยาง   '+chk(v,'install')+' ติดตั้ง   '+chk(v,'other')+' อื่นๆ'; }
 function catLine(v){ return chk(v,'machine')+' เครื่องจักร   '+chk(v,'electrical')+' ระบบไฟฟ้า   '+chk(v,'building')+' อาคาร-สถานที่   '+chk(v,'vehicle')+' รถ   '+chk(v,'other')+' อื่นๆ'; }
 
-function genPdf(ticketNo){
+/** สร้างชุดค่าที่จะพิมพ์ลงฟอร์ม (แยกออกมาเพื่อให้ตรวจสอบได้โดยไม่ต้องสร้างไฟล์) */
+function pdfMap(ticketNo){
   var r = getRows(SHEETS.REQ).filter(function(x){ return x.ticket_no === ticketNo; })[0];
   if(!r) throw 'ไม่พบใบ ' + ticketNo;
   var veh = r.vehicle_key ? getRows(SHEETS.VEH).filter(function(v){ return v.vehicle_key === r.vehicle_key; })[0] : null;
   var isVeh = !!r.vehicle_key;
-
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var tpl = ss.getSheetByName('FormTemplate');
-  if(!tpl) throw 'ไม่พบแท็บ FormTemplate (import ฟอร์ม + วาง placeholder ก่อน)';
 
   // อาการ (รวมข้อมูลรถ + เงิน เพราะฟอร์มเดิมไม่มีช่องไมล์/เงิน)
   var sym = r.symptom || '';
@@ -135,6 +132,17 @@ function genPdf(ticketNo){
     'สาเหตุ':       r.cause || '',
     'การแก้ไข':     fix
   };
+  return map;
+}
+
+function genPdf(ticketNo){
+  var r = getRows(SHEETS.REQ).filter(function(x){ return x.ticket_no === ticketNo; })[0];
+  if(!r) throw 'ไม่พบใบ ' + ticketNo;
+  var map = pdfMap(ticketNo);
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var tpl = ss.getSheetByName('FormTemplate');
+  if(!tpl) throw 'ไม่พบแท็บ FormTemplate (import ฟอร์ม + วาง placeholder ก่อน)';
+  var apprvName = r.approver_id ? empNameByLine(r.approver_id) : '';
 
   // copy แท็บ -> แทนค่า
   var tmpName = '__pdf_' + ticketNo;

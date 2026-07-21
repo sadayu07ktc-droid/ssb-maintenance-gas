@@ -321,6 +321,8 @@ var API = {
     s.getRange(row, scol + 1).setValue(file.getId());
     return { ok:true, folder: folder.getName(), file: file.getName() };
   },
+  // ดูค่าที่จะถูกพิมพ์ลงฟอร์ม (ไม่สร้างไฟล์ ไม่แก้ชีต) — ไว้ตรวจว่าโค้ดล่าสุดขึ้นแล้วหรือยัง
+  pdf_map: function(p){ return pdfMap(p.ticket_no); },
   // อ่านผังเซลล์ของ FormTemplate (ใช้ตอนวางตำแหน่งลายเซ็น) — อ่านอย่างเดียว ไม่แก้ชีต
   dump_template: function(){
     var sh2 = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('FormTemplate');
