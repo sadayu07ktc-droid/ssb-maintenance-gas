@@ -298,8 +298,7 @@ var API = {
   list_signatures: function(){
     var id = PropertiesService.getScriptProperties().getProperty('SIGN_FOLDER_ID');
     var diag = { prop_SIGN_FOLDER_ID: id || '(ยังไม่ได้ตั้ง)',
-                 all_props: PropertiesService.getScriptProperties().getKeys(),
-                 script_account: Session.getEffectiveUser().getEmail() };
+                 all_props: PropertiesService.getScriptProperties().getKeys() };
     if(id){
       try{ var t = DriveApp.getFolderById(id); diag.by_id = 'OK: ' + t.getName(); }
       catch(e){ diag.by_id = 'ERROR: ' + e; }
