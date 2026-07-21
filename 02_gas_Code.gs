@@ -296,12 +296,16 @@ var API = {
   },
   // รายชื่อไฟล์ในโฟลเดอร์ลายเซ็น (ใช้ตรวจว่าตั้งชื่อไฟล์ตรงกับพนักงานไหม)
   list_signatures: function(){
-    var f = getSignFolder();
-    if(!f){
-      var all = DriveApp.getFolders(), cand = [];
-      while(all.hasNext() && cand.length < 80) cand.push(all.next().getName());
-      return { error:'ไม่พบโฟลเดอร์ลายเซ็น', folders_in_drive: cand };
+    var id = PropertiesService.getScriptProperties().getProperty('SIGN_FOLDER_ID');
+    var diag = { prop_SIGN_FOLDER_ID: id || '(ยังไม่ได้ตั้ง)',
+                 all_props: PropertiesService.getScriptProperties().getKeys(),
+                 script_account: Session.getEffectiveUser().getEmail() };
+    if(id){
+      try{ var t = DriveApp.getFolderById(id); diag.by_id = 'OK: ' + t.getName(); }
+      catch(e){ diag.by_id = 'ERROR: ' + e; }
     }
+    var f = getSignFolder();
+    if(!f) return { error:'ไม่พบโฟลเดอร์ลายเซ็น', diag: diag };
     var it = f.getFiles(), names = [];
     while(it.hasNext() && names.length < 60) names.push(it.next().getName());
     return { folder: f.getName(), files: names };
