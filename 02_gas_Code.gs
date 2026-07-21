@@ -240,12 +240,17 @@ var API = {
   // แอดมินตรวจงานเสร็จแล้ว -> ส่งให้ผู้อนุมัติ (ขั้นตอนสุดท้ายของ flow อาคาร-สถานที่)
   send_approval: function(p){
     var cur = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === p.ticket_no; })[0];
-    patchByTicket(SHEETS.REQ, p.ticket_no, { status:'pending_approval', reviewed_by: p.actor||'', reviewed_at: now(), updated_at: now() });
     var prev = cur ? String(cur.status) : '';
+    var isResend = (prev === 'rejected');
+    var patch = { status:'pending_approval', reviewed_by: p.actor||'', reviewed_at: now(), updated_at: now() };
+    if(isResend) patch.rejected_reason = '';   // ล้างเหตุผลเดิม จะได้ไม่ค้างบนใบที่แก้แล้ว
+    patchByTicket(SHEETS.REQ, p.ticket_no, patch);
     logStatus(p.ticket_no, prev, 'pending_approval', p.actor||'admin',
-      prev === 'done' ? 'แอดมินตรวจงานแล้ว → ส่งอนุมัติ' : 'แอดมินตรวจข้อมูลแล้ว → ส่งอนุมัติ');
-    notifyApprovers('📋 ตรวจงานแล้ว รออนุมัติ: ' + p.ticket_no);
-    return { ok:true };
+      isResend ? 'แก้ไขตามที่ตีกลับแล้ว → ส่งอนุมัติใหม่'
+               : (prev === 'done' ? 'แอดมินตรวจงานแล้ว → ส่งอนุมัติ' : 'แอดมินตรวจข้อมูลแล้ว → ส่งอนุมัติ'));
+    notifyApprovers((isResend ? '🔁 แก้ไขแล้ว ส่งอนุมัติใหม่: ' : '📋 ตรวจงานแล้ว รออนุมัติ: ') + p.ticket_no);
+    if(isResend && cur) linePush(cur.requester_id, '🔁 ใบแจ้งซ่อม ' + p.ticket_no + ' แก้ไขแล้ว ส่งให้ผู้อนุมัติอีกครั้ง');
+    return { ok:true, resend: isResend };
   },
   logs: function(p){
     return getRows(SHEETS.LOG).filter(function(r){ return r.ticket_no === p.ticket_no; })
