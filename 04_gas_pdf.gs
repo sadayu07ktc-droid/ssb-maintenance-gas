@@ -110,7 +110,8 @@ function genPdf(ticketNo){
   if(r.amount) fix += (fix ? '   ' : '') + 'จำนวนเงิน ' + money(r.amount) + ' บาท';
 
   var apprvName = r.approver_id ? empNameByLine(r.approver_id) : '';
-  var apprv = apprvName + (r.approved_at ? ('   ✔ ' + ddmmyyyy(r.approved_at)) : '   (รออนุมัติ)');
+  // ไม่ต่อวันที่ตรงชื่อ — มีช่อง "วันที่" แยกอยู่แล้ว
+  var apprv = r.approved_at ? apprvName : (apprvName + '   (รออนุมัติ)');
   var repTime = ''; var _mt = String(r.reported_at||'').match(/\d{1,2}:\d{2}/); if(_mt) repTime = _mt[0];
 
   var map = {
@@ -140,13 +141,21 @@ function genPdf(ticketNo){
   var ex = ss.getSheetByName(tmpName); if(ex) ss.deleteSheet(ex);
   var tmp = tpl.copyTo(ss).setName(tmpName);
   SpreadsheetApp.flush();
+  // ช่องวันที่ต้องเป็น "ข้อความ" ก่อนแทนค่า ไม่งั้น Sheets แปลง 21-07-2026 เป็น Date แล้วโชว์ Tue Jul 21 2026
+  ['S14','G4','O33','O37'].forEach(function(a1){ try{ tmp.getRange(a1).setNumberFormat('@'); }catch(e){} });
   Object.keys(map).forEach(function(k){ tmp.createTextFinder('{{' + k + '}}').replaceAllWith(String(map[k])); });
   SpreadsheetApp.flush();
 
   // ล้าง rich-text ที่ import จาก Excel + ตั้งขนาดฟอนต์ช่องค่าให้เท่ากัน (กันฟอนต์เพี้ยน)
   var VAL_FONT = 11;
   ['G3','M3','R3','G4','N4','H5','N5','E7','K7','E8','E9','E10','B14','M14','S14','B16','B22'].forEach(function(a1){
-    try{ var c = tmp.getRange(a1); c.setValue(String(c.getValue()==null?'':c.getValue())); c.setFontSize(VAL_FONT).setFontFamily('Sarabun'); }catch(e){}
+    try{
+      var c = tmp.getRange(a1), v = c.getValue();
+      // ถ้า Sheets แปลงเป็นวันที่ไปแล้ว ให้เขียนกลับเป็น dd-mm-yyyy (ไม่ใช่ Tue Jul 21 2026 …)
+      v = (v instanceof Date) ? Utilities.formatDate(v, TZ, 'dd-MM-yyyy') : String(v == null ? '' : v);
+      c.setNumberFormat('@'); c.setValue(v);
+      c.setFontSize(VAL_FONT).setFontFamily('Sarabun');
+    }catch(e){}
   });
   SpreadsheetApp.flush();
 
@@ -158,7 +167,7 @@ function genPdf(ticketNo){
       if(sig && tmp.getRowHeight(37) < 52) tmp.setRowHeight(37, 52);
       if(sig) placeSign(tmp, sig, 'F37');
       else    tmp.getRange('F37').setValue(apprvName);   // ไม่มีรูป -> พิมพ์ชื่อแทน
-      tmp.getRange('O37').setValue(ddmmyyyy(r.approved_at));
+      tmp.getRange('O37').setNumberFormat('@').setValue(ddmmyyyy(r.approved_at));
       SpreadsheetApp.flush();
     }catch(e){}
   }
