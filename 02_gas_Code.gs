@@ -361,7 +361,9 @@ var API = {
   // แนบบิล/ใบเสร็จ (รูป base64) -> เก็บใน Drive -> ต่อ url เข้า receipt_urls
   upload_receipt: function(p){
     var folder = getReceiptFolder();
-    var blob = Utilities.newBlob(Utilities.base64Decode(p.data), p.mime||'image/jpeg', p.filename||('receipt_'+p.ticket_no+'_'+uuid().slice(0,8)+'.jpg'));
+    var ext = String(p.mime||'') === 'application/pdf' ? '.pdf' : '.jpg';
+    var blob = Utilities.newBlob(Utilities.base64Decode(p.data), p.mime||'image/jpeg',
+                 p.filename || ('receipt_'+p.ticket_no+'_'+uuid().slice(0,8)+ext));
     var file = folder.createFile(blob);
     file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
     var url = 'https://drive.google.com/file/d/' + file.getId() + '/view';
@@ -377,7 +379,9 @@ var API = {
     var head = s.getRange(1,1,1,s.getLastColumn()).getValues()[0];
     if(head.indexOf('ไฟล์แนบ') < 0){ s.getRange(1, s.getLastColumn()+1).setValue('ไฟล์แนบ'); head.push('ไฟล์แนบ'); }
     var folder = getReceiptFolder();
-    var blob = Utilities.newBlob(Utilities.base64Decode(p.data), p.mime||'image/jpeg', p.filename||('hist_'+uuid().slice(0,8)+'.jpg'));
+    var hext = String(p.mime||'') === 'application/pdf' ? '.pdf' : '.jpg';
+    var blob = Utilities.newBlob(Utilities.base64Decode(p.data), p.mime||'image/jpeg',
+                 p.filename || ('hist_'+uuid().slice(0,8)+hext));
     var file = folder.createFile(blob);
     file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
     var url = 'https://drive.google.com/file/d/' + file.getId() + '/view';
