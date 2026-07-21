@@ -25,7 +25,8 @@ function getSignFolder(){
   // 3) ชื่อใกล้เคียง (เผื่อสะกด/เว้นวรรคต่างกัน)
   var s = DriveApp.searchFolders('title contains "ลายเซ" and trashed = false');
   if(s.hasNext()) return s.next();
-  return null;
+  // 4) ไม่มีเลย -> สร้างเอง (สคริปต์เป็นเจ้าของ จึงเข้าถึงได้แน่นอน)
+  return DriveApp.createFolder('ssb-signatures');
 }
 /** วางรูปลายเซ็นให้พอดีช่อง (รองรับเซลล์ที่ merge) */
 function placeSign(tmp, blob, a1){
@@ -49,6 +50,11 @@ function signBlobByLine(lid){
   if(!lid) return null;
   var e = getRows(SHEETS.EMP).filter(function(r){ return String(r.line_user_id) === String(lid); })[0];
   if(!e) return null;
+  // 1) อัปโหลดผ่านแอปไว้แล้ว -> ใช้ไฟล์นั้นเลย (ชัวร์สุด ไม่ต้องเดาชื่อไฟล์)
+  if(e.signature_file_id){
+    try{ return DriveApp.getFileById(String(e.signature_file_id)).getBlob(); }catch(err){}
+  }
+  // 2) ไม่มี -> เดาจากชื่อไฟล์ในโฟลเดอร์
   var folder = getSignFolder(); if(!folder) return null;
   var keys = [e.full_name, e.emp_code, e.id].filter(function(k){ return k && String(k).trim(); })
     .map(function(k){ return String(k).trim().toLowerCase(); });
@@ -69,7 +75,11 @@ function empNameByLine(lid){
   var e = getRows(SHEETS.EMP).filter(function(r){ return String(r.line_user_id) === String(lid); })[0];
   return e ? (e.full_name || String(lid)) : String(lid);
 }
-function money(v){ v = String(v==null?'':v).replace(/,/g,''); return (v!=='' && !isNaN(v)) ? Number(v).toLocaleString() : ''; }
+function money(v){ v = String(v==null?'':v).replace(/,/g,'');
+  if(v==='' || isNaN(v)) return '';
+  var n = Number(v);
+  return n.toLocaleString('en-US', { minimumFractionDigits: (n % 1 ? 2 : 0), maximumFractionDigits: 2 });
+}
 function ddmmyyyy(d){ var p = String(d||'').slice(0,10).split('-'); return p.length===3 ? (p[2]+'-'+p[1]+'-'+p[0]) : String(d||''); }
 
 function kindLine(v){ return chk(v,'repair')+' ซ่อม   '+chk(v,'replace_part')+' เปลี่ยนอะไหล่   '+chk(v,'inspect')+' ตรวจเช็ค   '+chk(v,'tire')+' เปลี่ยนยาง   '+chk(v,'install')+' ติดตั้ง   '+chk(v,'other')+' อื่นๆ'; }

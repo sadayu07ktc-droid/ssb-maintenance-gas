@@ -283,6 +283,30 @@ var API = {
     return { ok:true, todo: task, pdf_url: pdfUrl };
   },
   gen_pdf: function(p){ return { pdf_url: genPdf(p.ticket_no) }; },
+  // อัปโหลดลายเซ็นของตัวเอง -> เก็บใน Drive + ผูก file id ไว้ที่แถวพนักงาน
+  upload_signature: function(p){
+    var s = sh(SHEETS.EMP);
+    var vals = s.getDataRange().getValues(), head = vals[0];
+    var lcol = head.indexOf('line_user_id');
+    if(head.indexOf('signature_file_id') < 0){
+      s.getRange(1, head.length + 1).setValue('signature_file_id');
+      head.push('signature_file_id');
+    }
+    var scol = head.indexOf('signature_file_id'), row = -1, name = '';
+    for(var i=1;i<vals.length;i++){
+      if(String(vals[i][lcol]) === String(p.line_user_id)){ row = i + 1; name = String(vals[i][head.indexOf('full_name')] || ''); break; }
+    }
+    if(row < 0) throw 'ไม่พบพนักงานคนนี้';
+    var folder = getSignFolder();
+    var blob = Utilities.newBlob(Utilities.base64Decode(p.data), p.mime || 'image/png',
+                 'sign_' + (name || p.line_user_id).replace(/[\\/:*?"<>|]/g,'') + '.png');
+    // ลบไฟล์เก่าก่อน จะได้ไม่มีลายเซ็นค้างหลายอัน
+    var old = String(vals[row-1][scol] || '');
+    if(old){ try{ DriveApp.getFileById(old).setTrashed(true); }catch(e){} }
+    var file = folder.createFile(blob);
+    s.getRange(row, scol + 1).setValue(file.getId());
+    return { ok:true, folder: folder.getName(), file: file.getName() };
+  },
   // อ่านผังเซลล์ของ FormTemplate (ใช้ตอนวางตำแหน่งลายเซ็น) — อ่านอย่างเดียว ไม่แก้ชีต
   dump_template: function(){
     var sh2 = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('FormTemplate');
