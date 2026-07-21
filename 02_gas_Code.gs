@@ -288,6 +288,15 @@ var API = {
     return { ok:true, todo: task, pdf_url: pdfUrl };
   },
   gen_pdf: function(p){ return { pdf_url: genPdf(p.ticket_no) }; },
+  // ดึงลายเซ็นของตัวเองมาแสดง (ส่งเป็น base64 — ไม่ต้องเปิดไฟล์เป็น public)
+  signature: function(p){
+    var e = getRows(SHEETS.EMP).filter(function(r){ return String(r.line_user_id) === String(p.line_user_id); })[0];
+    if(!e || !e.signature_file_id) return { has:false };
+    try{
+      var f = DriveApp.getFileById(String(e.signature_file_id)), b = f.getBlob();
+      return { has:true, mime:b.getContentType(), data:Utilities.base64Encode(b.getBytes()), updated:String(f.getLastUpdated()) };
+    }catch(err){ return { has:false, error:String(err) }; }
+  },
   // อัปโหลดลายเซ็นของตัวเอง -> เก็บใน Drive + ผูก file id ไว้ที่แถวพนักงาน
   upload_signature: function(p){
     var s = sh(SHEETS.EMP);
