@@ -303,7 +303,7 @@ var API = {
     }
     if(row < 0) throw 'ไม่พบพนักงานคนนี้';
     var folder = getSignFolder();
-    var blob = Utilities.newBlob(Utilities.base64Decode(p.data), p.mime || 'image/png',
+    var blob = Utilities.newBlob(Utilities.base64Decode(p.data), 'image/png',
                  'sign_' + (name || p.line_user_id).replace(/[\\/:*?"<>|]/g,'') + '.png');
     // ลบไฟล์เก่าก่อน จะได้ไม่มีลายเซ็นค้างหลายอัน
     var old = String(vals[row-1][scol] || '');

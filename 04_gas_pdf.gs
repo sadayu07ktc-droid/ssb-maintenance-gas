@@ -37,8 +37,9 @@ function placeSign(tmp, blob, a1){
   for(r = m.getRow();    r < m.getRow()    + m.getNumRows();    r++) h += tmp.getRowHeight(r);
   var img = tmp.insertImage(blob, m.getColumn(), m.getRow());
   var iw = img.getWidth(), ih = img.getHeight();
-  var maxW = Math.max(w - 12, 40), maxH = Math.max(h - 4, 26);
+  var maxW = Math.max(w - 12, 40), maxH = Math.max(h - 6, 26);
   var s = Math.min(maxW / iw, maxH / ih);
+  if(s > 3) s = 3;   // รูปเล็กมากก็ไม่ขยายจนแตก
   var nw = Math.round(iw * s), nh = Math.round(ih * s);
   img.setWidth(nw).setHeight(nh);
   img.setAnchorCellXOffset(Math.round((w - nw) / 2));
@@ -153,6 +154,8 @@ function genPdf(ticketNo){
   if(r.approved_at && r.approver_id){
     try{
       var sig = signBlobByLine(r.approver_id);
+      // แถวลายเซ็นเตี้ยเกินไป (~20px) รูปจะเล็กจนอ่านไม่ออก -> ขยายแถวก่อนวาง
+      if(sig && tmp.getRowHeight(37) < 52) tmp.setRowHeight(37, 52);
       if(sig) placeSign(tmp, sig, 'F37');
       else    tmp.getRange('F37').setValue(apprvName);   // ไม่มีรูป -> พิมพ์ชื่อแทน
       tmp.getRange('O37').setValue(ddmmyyyy(r.approved_at));
