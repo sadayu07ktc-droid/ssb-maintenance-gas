@@ -50,7 +50,13 @@ function empByToken(token){
 function patchEmp(row, patch){
   var s = sh(SHEETS.EMP);
   var head = s.getRange(1,1,1,s.getLastColumn()).getValues()[0];
-  head.forEach(function(h,c){ if(patch[h] !== undefined) s.getRange(row, c+1).setValue(patch[h]); });
+  head.forEach(function(h,c){
+    if(patch[h] === undefined) return;
+    var cell = s.getRange(row, c+1);
+    // เบอร์โทร/รหัส ต้องเก็บเป็นข้อความ ไม่งั้น Sheets กิน 0 ตัวหน้า (0834847856 -> 834847856)
+    if(h === 'phone' || h === 'emp_code') cell.setNumberFormat('@');
+    cell.setValue(patch[h]);
+  });
 }
 function pubEmp(e){ return { id:e.id, full_name:e.full_name, role:(e.role||'requester'), email:e.email, department:e.department, emp_code:e.emp_code, has_pin: !!e.pin_hash }; }
 
