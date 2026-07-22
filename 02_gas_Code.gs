@@ -225,7 +225,7 @@ var API = {
     rec.status = (byAdmin && String(p.asset_category) !== 'building') ? 'pending_approval' : 'submitted';
     appendObj(SHEETS.REQ, rec);
     logStatus(t, '', rec.status, p.requester_id || '', byAdmin ? 'แอดมินแจ้งเอง → ส่งอนุมัติเลย' : '');
-    if(rec.status === 'pending_approval') notifyApprovers('📋 มีใบแจ้งซ่อมรออนุมัติ: ' + t);
+    if(rec.status === 'pending_approval') notifyApprovalCard(t, false);
     return { ticket_no: t, status: rec.status };
   },
   pending_approvals: function(){
@@ -266,7 +266,7 @@ var API = {
     base.status = 'pending_approval';
     patchByTicket(SHEETS.REQ, p.ticket_no, base);
     logStatus(p.ticket_no, cur?cur.status:'', 'pending_approval', p.actor||'admin', 'มอบหมาย ' + (p.assignee_name||''));
-    notifyApprovers('📋 มีใบแจ้งซ่อมรออนุมัติ: ' + p.ticket_no);
+    notifyApprovalCard(p.ticket_no, false);
     return { ok:true };
   },
   // แอดมินตรวจงานเสร็จแล้ว -> ส่งให้ผู้อนุมัติ (ขั้นตอนสุดท้ายของ flow อาคาร-สถานที่)
@@ -280,7 +280,7 @@ var API = {
     logStatus(p.ticket_no, prev, 'pending_approval', p.actor||'admin',
       isResend ? 'แก้ไขตามที่ตีกลับแล้ว → ส่งอนุมัติใหม่'
                : (prev === 'done' ? 'แอดมินตรวจงานแล้ว → ส่งอนุมัติ' : 'แอดมินตรวจข้อมูลแล้ว → ส่งอนุมัติ'));
-    notifyApprovers((isResend ? '🔁 แก้ไขแล้ว ส่งอนุมัติใหม่: ' : '📋 ตรวจงานแล้ว รออนุมัติ: ') + p.ticket_no);
+    notifyApprovalCard(p.ticket_no, isResend);
     if(isResend && cur) linePush(cur.requester_id, '🔁 ใบแจ้งซ่อม ' + p.ticket_no + ' แก้ไขแล้ว ส่งให้ผู้อนุมัติอีกครั้ง');
     return { ok:true, resend: isResend };
   },
@@ -489,8 +489,87 @@ function notifyAdmins(text){
     .forEach(function(a){ linePush(a.line_user_id, text); });
 }
 function notifyApprovers(text){
-  getRows(SHEETS.EMP).filter(function(r){ return /approv|exec|manager|บริหาร/i.test(String(r.role||'')) && r.line_user_id && String(r.active)==='true'; })
-    .forEach(function(a){ linePush(a.line_user_id, text); });
+  approverIds().forEach(function(id){ linePush(id, text); });
+}
+function approverIds(){
+  return getRows(SHEETS.EMP)
+    .filter(function(r){ return /approv|exec|manager|บริหาร/i.test(String(r.role||'')) && r.line_user_id && String(r.active)==='true'; })
+    .map(function(r){ return r.line_user_id; });
+}
+
+// ===== Flex message: ใบรออนุมัติ (กดอนุมัติ/ไม่อนุมัติ/ดูประวัติ ได้จากแชตเลย) =====
+var LIFF_ID_APP = '2010695850-idkjafAC';
+function liffUrl(q){ return 'https://liff.line.me/' + LIFF_ID_APP + (q ? ('?' + q) : ''); }
+function pushFlex(to, alt, bubble){
+  var tk = PropertiesService.getScriptProperties().getProperty('LINE_PUSH_TOKEN');
+  if(!tk || !to) return;
+  try{
+    UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {
+      method:'post', contentType:'application/json',
+      headers:{ Authorization:'Bearer ' + tk },
+      payload: JSON.stringify({ to:String(to), messages:[{ type:'flex', altText:String(alt).slice(0,390), contents:bubble }] }),
+      muteHttpExceptions:true
+    });
+  }catch(e){}
+}
+function fxRow(label, value){
+  return { type:'box', layout:'baseline', spacing:'sm', contents:[
+    { type:'text', text:String(label), size:'sm', color:'#8a8ca3', flex:3, weight:'bold' },
+    { type:'text', text:String(value || '-'), size:'sm', color:'#23264d', flex:7, wrap:true }
+  ]};
+}
+/** สร้างการ์ดใบแจ้งซ่อมสำหรับผู้อนุมัติ — ข้อมูลชุดเดียวกับการ์ดในแอป */
+function approvalBubble(r, resend){
+  var veh = r.vehicle_key ? getRows(SHEETS.VEH).filter(function(v){ return v.vehicle_key === r.vehicle_key; })[0] : null;
+  var asset = r.vehicle_key
+    ? [r.vehicle_key, veh && veh['ยี่ห้อ_รุ่น'], veh && veh.plate_current].filter(Boolean).join(' · ')
+    : [r.machine_name, r.machine_code && ('ห้อง ' + r.machine_code)].filter(Boolean).join(' · ');
+  var re = (String(r.request_type) === 'reimburse');
+  var body = [];
+  body.push(fxRow('รถ/เครื่อง', asset));
+  if(r.mileage) body.push(fxRow('เลขไมล์', money(r.mileage) + ' กม.'));
+  if(r.service_interval_km) body.push(fxRow('รอบเช็ค', money(r.service_interval_km) + ' กม.'));
+  body.push(fxRow('รายการ', (KIND_TH[r.request_kind] || r.request_kind || '') + ' ' + (r.symptom || '')));
+  if(r.fix_detail) body.push(fxRow('การแก้ไข', r.fix_detail));
+  body.push(fxRow(r.repair_by === 'internal' ? 'ช่าง' : 'ศูนย์/อู่',
+    r.repair_by === 'internal' ? (r.assignee_name || 'ยังไม่มอบหมาย') : (r.vendor || 'ไม่ได้ระบุ')));
+  body.push(fxRow('จำนวนเงิน', baht(r.amount) + ' บาท'));
+  body.push(fxRow('ผู้แจ้ง', r.requester_name || ''));
+
+  var btn = function(label, style, color, url){
+    return { type:'button', style:style, height:'sm', color:color, action:{ type:'uri', label:label, uri:url } };
+  };
+  return {
+    type:'bubble',
+    header:{ type:'box', layout:'vertical', backgroundColor:'#33348f', paddingAll:'14px', contents:[
+      { type:'text', text:(resend ? '🔁 แก้ไขแล้ว ส่งอนุมัติใหม่' : '📋 ใบแจ้งซ่อมรออนุมัติ'), size:'xs', color:'#c9c9ee' },
+      { type:'text', text:String(r.ticket_no), size:'lg', weight:'bold', color:'#ffffff' },
+      { type:'text', text:(re ? '💸 ทำแล้วมาเบิก — จ่ายไปแล้ว รออนุมัติเบิกคืน' : '📝 ขออนุมัติก่อนทำ — อนุมัติแล้วจึงเริ่มซ่อม'),
+        size:'xxs', color:'#ffd591', wrap:true, margin:'sm' }
+    ]},
+    body:{ type:'box', layout:'vertical', spacing:'sm', paddingAll:'14px', contents:body },
+    footer:{ type:'box', layout:'vertical', spacing:'sm', paddingAll:'12px', contents:[
+      { type:'box', layout:'horizontal', spacing:'sm', contents:[
+        btn('✓ อนุมัติ', 'primary', '#22a06b', liffUrl('t=' + r.ticket_no + '&act=approve')),
+        btn('✕ ไม่อนุมัติ', 'primary', '#e24b4a', liffUrl('t=' + r.ticket_no + '&act=reject'))
+      ]},
+      btn('🕘 ดูรายละเอียด / ประวัติ', 'secondary', null, liffUrl('t=' + r.ticket_no))
+    ]}
+  };
+}
+var KIND_TH = { repair:'ซ่อม', replace_part:'เปลี่ยนอะไหล่', inspect:'ตรวจเช็ค', tire:'เปลี่ยนยาง', install:'ติดตั้ง', other:'อื่นๆ' };
+/** แจ้งผู้อนุมัติด้วยการ์ด (ถ้าสร้างการ์ดไม่ได้ ตกกลับไปเป็นข้อความธรรมดา) */
+function notifyApprovalCard(ticketNo, resend){
+  var r = getRows(SHEETS.REQ).filter(function(x){ return x.ticket_no === ticketNo; })[0];
+  var ids = approverIds();
+  if(!r || !ids.length){ notifyApprovers('📋 มีใบแจ้งซ่อมรออนุมัติ: ' + ticketNo); return; }
+  try{
+    var b = approvalBubble(r, resend);
+    var alt = (resend ? '🔁 แก้ไขแล้ว ส่งอนุมัติใหม่: ' : '📋 ใบแจ้งซ่อมรออนุมัติ: ') + ticketNo;
+    ids.forEach(function(id){ pushFlex(id, alt, b); });
+  }catch(e){
+    notifyApprovers('📋 มีใบแจ้งซ่อมรออนุมัติ: ' + ticketNo);
+  }
 }
 
 function createTodoTask(req){
