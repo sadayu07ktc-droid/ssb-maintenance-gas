@@ -557,7 +557,7 @@ function approvalBubble(r, resend){
     ]}
   };
 }
-var KIND_TH = { repair:'ซ่อม', replace_part:'เปลี่ยนอะไหล่', inspect:'ตรวจเช็ค', tire:'เปลี่ยนยาง', install:'ติดตั้ง', other:'อื่นๆ' };
+var KIND_TH = { repair:'ซ่อม', replace_part:'เปลี่ยนอะไหล่', inspect:'ตรวจเช็คระยะ', tire:'เปลี่ยนยาง', install:'ติดตั้ง', other:'อื่นๆ' };
 /** แจ้งผู้อนุมัติด้วยการ์ด (ถ้าสร้างการ์ดไม่ได้ ตกกลับไปเป็นข้อความธรรมดา) */
 function notifyApprovalCard(ticketNo, resend){
   var r = getRows(SHEETS.REQ).filter(function(x){ return x.ticket_no === ticketNo; })[0];
