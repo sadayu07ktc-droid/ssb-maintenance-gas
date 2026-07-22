@@ -154,11 +154,26 @@ function setup(){
 }
 
 // ===== TICKET NO =====
+/**
+ * เลขที่ใบ = ต่อจาก "เลขสูงสุดที่เคยใช้" ของเดือนนั้น (ไม่ใช่นับจำนวนแถว)
+ * ดูทั้ง Requests และ StatusLogs เพราะถ้าลบแถวใน Requests ทิ้ง การนับแถวจะถอยกลับ
+ * แล้วออกเลขซ้ำ -> ประวัติ/PDF ของคนละใบจะปนกัน
+ */
 function ticketNo(){
   var ym = Utilities.formatDate(new Date(), TZ, 'yyyyMM');
   var prefix = 'HRC-' + ym + '-';
-  var n = getRows(SHEETS.REQ).filter(function(r){ return String(r.ticket_no).indexOf(prefix) === 0; }).length + 1;
-  return prefix + ('000' + n).slice(-3);
+  var max = 0;
+  function scan(rows){
+    rows.forEach(function(r){
+      var t = String(r.ticket_no || '');
+      if(t.indexOf(prefix) !== 0) return;
+      var n = parseInt(t.slice(prefix.length), 10);
+      if(!isNaN(n) && n > max) max = n;
+    });
+  }
+  scan(getRows(SHEETS.REQ));
+  scan(getRows(SHEETS.LOG));
+  return prefix + ('000' + (max + 1)).slice(-3);
 }
 function logStatus(ticket, from, to, actor, note){
   appendObj(SHEETS.LOG, { id: uuid(), ticket_no: ticket, from_status: from||'', to_status: to||'',
