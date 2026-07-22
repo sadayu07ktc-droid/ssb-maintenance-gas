@@ -391,7 +391,9 @@ var API = {
   },
   reject: function(p){
     var cur = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === p.ticket_no; })[0];
-    patchByTicket(SHEETS.REQ, p.ticket_no, { status:'rejected', rejected_reason: p.reason||'', updated_at: now() });
+    // เก็บว่าใครเป็นคนตีกลับด้วย ไม่งั้นหน้า "ประวัติของผู้อนุมัติ" จะหาใบนี้ไม่เจอ
+    patchByTicket(SHEETS.REQ, p.ticket_no, { status:'rejected', rejected_reason: p.reason||'',
+      approver_id: p.approver_line_id||'', updated_at: now() });
     logStatus(p.ticket_no, cur?cur.status:'', 'rejected', p.approver_line_id||'', p.reason||'');
     if(cur) linePush(cur.requester_id, '❌ ใบแจ้งซ่อม ' + p.ticket_no + ' ไม่ได้รับการอนุมัติ' + (p.reason?(' · '+p.reason):''));
     return { ok:true };
