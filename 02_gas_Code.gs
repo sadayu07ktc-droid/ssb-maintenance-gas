@@ -355,6 +355,25 @@ var API = {
     s.getRange(row, scol + 1).setValue(file.getId());
     return { ok:true, folder: folder.getName(), file: file.getName() };
   },
+  // ทดสอบส่งการ์ด Flex (ไม่แก้ข้อมูลใดๆ) — คืนสถานะจาก LINE API มาดูว่าพลาดตรงไหน
+  test_flex: function(p){
+    var r = getRows(SHEETS.REQ).filter(function(x){ return x.ticket_no === p.ticket_no; })[0];
+    if(!r) return { error:'ไม่พบใบ ' + p.ticket_no };
+    var tk = PropertiesService.getScriptProperties().getProperty('LINE_PUSH_TOKEN');
+    if(!tk) return { error:'ยังไม่ได้ตั้ง LINE_PUSH_TOKEN' };
+    var to = p.to || approverIds()[0];
+    if(!to) return { error:'ไม่มีผู้อนุมัติที่ active ในชีต Employees', approvers: approverIds().length };
+    var bubble;
+    try{ bubble = approvalBubble(r, false); }
+    catch(err){ return { error:'สร้างการ์ดไม่สำเร็จ: ' + err }; }
+    var res = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {
+      method:'post', contentType:'application/json',
+      headers:{ Authorization:'Bearer ' + tk },
+      payload: JSON.stringify({ to:String(to), messages:[{ type:'flex', altText:'ทดสอบการ์ด ' + p.ticket_no, contents:bubble }] }),
+      muteHttpExceptions:true
+    });
+    return { http: res.getResponseCode(), body: String(res.getContentText()).slice(0, 500), sent_to: String(to).slice(0, 8) + '…' };
+  },
   // ดูค่าที่จะถูกพิมพ์ลงฟอร์ม (ไม่สร้างไฟล์ ไม่แก้ชีต) — ไว้ตรวจว่าโค้ดล่าสุดขึ้นแล้วหรือยัง
   pdf_map: function(p){ return pdfMap(p.ticket_no); },
   // อ่านผังเซลล์ของ FormTemplate (ใช้ตอนวางตำแหน่งลายเซ็น) — อ่านอย่างเดียว ไม่แก้ชีต
