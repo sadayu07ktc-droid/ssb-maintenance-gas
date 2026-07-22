@@ -76,10 +76,12 @@ function empNameByLine(lid){
   var e = getRows(SHEETS.EMP).filter(function(r){ return String(r.line_user_id) === String(lid); })[0];
   return e ? (e.full_name || String(lid)) : String(lid);
 }
+// เลขไมล์/ระยะ = จำนวนเต็ม · จำนวนเงิน = ทศนิยม 2 ตำแหน่งเสมอ (ใช้ baht)
 function money(v){ v = String(v==null?'':v).replace(/,/g,'');
-  if(v==='' || isNaN(v)) return '';
-  var n = Number(v);
-  return n.toLocaleString('en-US', { minimumFractionDigits: (n % 1 ? 2 : 0), maximumFractionDigits: 2 });
+  return (v==='' || isNaN(v)) ? '' : Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 });
+}
+function baht(v){ v = String(v==null?'':v).replace(/,/g,'');
+  return (v==='' || isNaN(v)) ? '' : Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 function ddmmyyyy(d){ var p = String(d||'').slice(0,10).split('-'); return p.length===3 ? (p[2]+'-'+p[1]+'-'+p[0]) : String(d||''); }
 
@@ -104,7 +106,7 @@ function pdfMap(ticketNo){
   }
   // จำนวนเงิน -> ต่อท้ายช่อง "การแก้ไข" (ไม่ใช่ช่องอาการ)
   var fix = r.fix_detail || '';
-  if(r.amount) fix += (fix ? '   ' : '') + 'จำนวนเงิน ' + money(r.amount) + ' บาท';
+  if(r.amount) fix += (fix ? '   ' : '') + 'จำนวนเงิน ' + baht(r.amount) + ' บาท';
 
   var apprvName = r.approver_id ? empNameByLine(r.approver_id) : '';
   // ไม่ต่อวันที่ตรงชื่อ — มีช่อง "วันที่" แยกอยู่แล้ว
