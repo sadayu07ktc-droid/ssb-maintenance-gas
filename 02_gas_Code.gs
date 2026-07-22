@@ -548,6 +548,11 @@ function approvalBubble(r, resend){
   var re = (String(r.request_type) === 'reimburse');
   var body = [];
   body.push(fxRow('รถ/เครื่อง', asset));
+  // ผู้ดูแลรถประจำคัน — บางครั้งแอดมินแจ้งแทน ผู้อนุมัติจะได้รู้ว่ารถของใคร
+  if(veh){
+    var own = [veh['ผู้รับผิดชอบ'], veh['แผนก'], veh['สถานที่']].filter(Boolean).join(' · ');
+    if(own) body.push(fxRow('ผู้ดูแลรถ', own));
+  }
   if(r.mileage) body.push(fxRow('เลขไมล์', money(r.mileage) + ' กม.'));
   if(r.service_interval_km) body.push(fxRow('รอบเช็ค', money(r.service_interval_km) + ' กม.'));
   body.push(fxRow('รายการ', (KIND_TH[r.request_kind] || r.request_kind || '') + ' ' + (r.symptom || '')));
