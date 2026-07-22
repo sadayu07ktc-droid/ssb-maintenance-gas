@@ -186,6 +186,8 @@ function doGet(e){ e = e || {}; return route((e.parameter||{}).action, e.paramet
 function doPost(e){
   var b = {};
   try { b = JSON.parse(e.postData.contents); } catch(_) { b = (e && e.parameter) || {}; }
+  // LINE webhook ส่ง { destination, events:[...] } มา — ไม่ใช่ API ของแอปเรา
+  if(b && b.events){ try{ handleLineEvents(b.events); }catch(err){} return json({ ok:true }); }
   return route(b.action, b);
 }
 function route(action, p){
@@ -536,9 +538,14 @@ function approvalBubble(r, resend){
   body.push(fxRow('จำนวนเงิน', baht(r.amount) + ' บาท'));
   body.push(fxRow('ผู้แจ้ง', r.requester_name || ''));
 
-  var btn = function(label, style, color, url){
-    return { type:'button', style:style, height:'sm', color:color, action:{ type:'uri', label:label, uri:url } };
+  var btn = function(label, style, color, action){
+    return { type:'button', style:style, height:'sm', color:color, action:action };
   };
+  // postback = ทำงานจบในแชตเลย ไม่ต้องเปิดแอป
+  var pb = function(label, act){
+    return { type:'postback', label:label, data:pbData(act, r.ticket_no), displayText:(act==='approve'?'✓ อนุมัติ ':'✕ ไม่อนุมัติ ') + r.ticket_no };
+  };
+  var uri = function(label, url){ return { type:'uri', label:label, uri:url }; };
   return {
     type:'bubble',
     header:{ type:'box', layout:'vertical', backgroundColor:'#33348f', paddingAll:'14px', contents:[
@@ -550,14 +557,86 @@ function approvalBubble(r, resend){
     body:{ type:'box', layout:'vertical', spacing:'sm', paddingAll:'14px', contents:body },
     footer:{ type:'box', layout:'vertical', spacing:'sm', paddingAll:'12px', contents:[
       { type:'box', layout:'horizontal', spacing:'sm', contents:[
-        btn('✓ อนุมัติ', 'primary', '#22a06b', liffUrl('t=' + r.ticket_no + '&act=approve')),
-        btn('✕ ไม่อนุมัติ', 'primary', '#e24b4a', liffUrl('t=' + r.ticket_no + '&act=reject'))
+        btn('✓ อนุมัติ', 'primary', '#22a06b', pb('✓ อนุมัติ','approve')),
+        btn('✕ ไม่อนุมัติ', 'primary', '#e24b4a', pb('✕ ไม่อนุมัติ','reject'))
       ]},
-      btn('🕘 ดูรายละเอียด / ประวัติ', 'secondary', null, liffUrl('t=' + r.ticket_no))
+      btn('🕘 ดูรายละเอียด / ประวัติ', 'secondary', null, uri('ดูรายละเอียด', liffUrl('t=' + r.ticket_no)))
     ]}
   };
 }
 var KIND_TH = { repair:'ซ่อม', replace_part:'เปลี่ยนอะไหล่', inspect:'ตรวจเช็คระยะ', tire:'เปลี่ยนยาง', install:'ติดตั้ง', other:'อื่นๆ' };
+
+// ===== LINE webhook: กดปุ่มในแชตแล้วอนุมัติได้เลย =====
+/**
+ * GAS อ่าน header ไม่ได้ จึงตรวจ X-Line-Signature ไม่ได้
+ * -> ใส่ลายเซ็นของเราเองไปกับ postback data แล้วตรวจตอนรับกลับ
+ *    (ผู้ที่ไม่เคยได้รับการ์ดจะเดา sig ไม่ได้) + ตรวจสิทธิ์ผู้ใช้จาก userId ซ้ำอีกชั้น
+ */
+function pbSecret(){
+  var sp = PropertiesService.getScriptProperties();
+  var k = sp.getProperty('PB_SECRET');
+  if(!k){ k = Utilities.getUuid() + Utilities.getUuid(); sp.setProperty('PB_SECRET', k); }
+  return k;
+}
+function pbSig(act, ticket){
+  var raw = Utilities.computeHmacSha256Signature(act + '|' + ticket, pbSecret());
+  return Utilities.base64EncodeWebSafe(raw).slice(0, 16);
+}
+function pbData(act, ticket){ return 'act=' + act + '&t=' + ticket + '&s=' + pbSig(act, ticket); }
+function parseQS(s){
+  var o = {};
+  String(s || '').split('&').forEach(function(kv){
+    var i = kv.indexOf('='); if(i < 0) return;
+    o[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1));
+  });
+  return o;
+}
+function lineReply(token, text){
+  var tk = PropertiesService.getScriptProperties().getProperty('LINE_PUSH_TOKEN');
+  if(!tk || !token) return;
+  try{
+    UrlFetchApp.fetch('https://api.line.me/v2/bot/message/reply', {
+      method:'post', contentType:'application/json',
+      headers:{ Authorization:'Bearer ' + tk },
+      payload: JSON.stringify({ replyToken: token, messages:[{ type:'text', text:String(text).slice(0, 4900) }] }),
+      muteHttpExceptions:true
+    });
+  }catch(e){}
+}
+function handleLineEvents(events){
+  (events || []).forEach(function(ev){
+    if(!ev || ev.type !== 'postback') return;
+    var d = parseQS(ev.postback && ev.postback.data);
+    if(!d.act || !d.t) return;
+    var uid = ev.source && ev.source.userId;
+    var reply = ev.replyToken;
+
+    if(d.s !== pbSig(d.act, d.t)){ lineReply(reply, '❌ ลิงก์ไม่ถูกต้อง'); return; }
+
+    var emp = getRows(SHEETS.EMP).filter(function(r){ return String(r.line_user_id) === String(uid); })[0];
+    var isApprover = emp && String(emp.active) === 'true' && /approv|exec|manager|บริหาร/i.test(String(emp.role || ''));
+    if(!isApprover){ lineReply(reply, '⛔ บัญชีนี้ไม่มีสิทธิ์อนุมัติ'); return; }
+
+    var cur = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === d.t; })[0];
+    if(!cur){ lineReply(reply, '❌ ไม่พบใบ ' + d.t); return; }
+    if(String(cur.status) !== 'pending_approval'){
+      lineReply(reply, 'ℹ️ ใบ ' + d.t + ' ถูกดำเนินการไปแล้ว (' + (STATUS_TH[cur.status] || cur.status) + ')');
+      return;
+    }
+
+    if(d.act === 'approve'){
+      var res = API.approve({ ticket_no: d.t, approver_line_id: uid });
+      lineReply(reply, '✅ อนุมัติ ' + d.t + ' เรียบร้อย\nโดย ' + (emp.full_name || '')
+        + (res && /^https?:/.test(String(res.pdf_url || '')) ? ('\n\n📄 ใบงาน: ' + res.pdf_url) : ''));
+    } else if(d.act === 'reject'){
+      API.reject({ ticket_no: d.t, reason: 'ตีกลับจากแชต', approver_line_id: uid });
+      lineReply(reply, '↩️ ตีกลับ ' + d.t + ' แล้ว\nโดย ' + (emp.full_name || '')
+        + '\n\nระบุเหตุผลเพิ่มได้ที่: ' + liffUrl('t=' + d.t));
+    }
+  });
+}
+var STATUS_TH = { submitted:'รอแอดมินตรวจ', pending_approval:'รออนุมัติ', approved:'อนุมัติแล้ว',
+  in_progress:'กำลังทำ', done:'เสร็จ', sent_accounting:'ส่งบัญชี', closed:'ปิดงาน', rejected:'ไม่อนุมัติ' };
 /** แจ้งผู้อนุมัติด้วยการ์ด (ถ้าสร้างการ์ดไม่ได้ ตกกลับไปเป็นข้อความธรรมดา) */
 function notifyApprovalCard(ticketNo, resend){
   var r = getRows(SHEETS.REQ).filter(function(x){ return x.ticket_no === ticketNo; })[0];
