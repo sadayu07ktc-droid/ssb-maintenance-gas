@@ -557,8 +557,11 @@ function approvalBubble(r, resend){
   body.push(fxRow('จำนวนเงิน', baht(r.amount) + ' บาท'));
   body.push(fxRow('ผู้แจ้ง', r.requester_name || ''));
 
+  // LINE ไม่ยอมรับ color:null -> ต้องไม่ใส่คีย์ color เลยเมื่อไม่ระบุสี
   var btn = function(label, style, color, action){
-    return { type:'button', style:style, height:'sm', color:color, action:action };
+    var o = { type:'button', style:style, height:'sm', action:action };
+    if(color) o.color = color;
+    return o;
   };
   // postback = ทำงานจบในแชตเลย ไม่ต้องเปิดแอป
   var pb = function(label, act){
