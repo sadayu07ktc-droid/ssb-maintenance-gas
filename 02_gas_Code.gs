@@ -75,6 +75,24 @@ function syncHistory(ticketNo, create){
 }
 function uuid(){ return Utilities.getUuid(); }
 
+/**
+ * ประวัติซ่อมของรถ 1 คัน — จับคู่ด้วย vehicle_key "หรือ" ทะเบียนใดก็ได้ของคันนั้น
+ * (รถเปลี่ยนทะเบียน เช่น ก 4080-1 -> ขง 9219 แถวเก่า/ใหม่จะติดคนละคีย์ ประวัติเลยขาดเป็นท่อน)
+ */
+function normPlate(s){ return String(s == null ? '' : s).replace(/\s|-/g, '').toLowerCase(); }
+function histOf(vk){
+  if(!vk) return [];
+  var v = getRows(SHEETS.VEH).filter(function(x){ return x.vehicle_key === vk; })[0] || {};
+  var plates = {};
+  [v.plate_current, v.plate_red, v.plate_all].forEach(function(p){
+    String(p || '').split(/\s*[,/]\s*/).forEach(function(one){ if(normPlate(one)) plates[normPlate(one)] = 1; });
+  });
+  return getRows(SHEETS.HIST).filter(function(r){
+    if(r.vehicle_key === vk) return true;
+    if(r.vehicle_key) return false;               // ติดคีย์คันอื่นแล้ว ไม่ใช่ของเรา
+    return !!plates[normPlate(r['ทะเบียนรถ'])];   // ยังไม่มีคีย์ -> เทียบด้วยทะเบียน
+  });
+}
 function getRows(name){
   var s = sh(name); if(!s) return [];
   var vals = s.getDataRange().getValues();
@@ -171,13 +189,12 @@ var API = {
   },
   vehicles: function(){ return getRows(SHEETS.VEH).map(strip); },
   vehicle_history: function(p){
-    return getRows(SHEETS.HIST)
-      .filter(function(r){ return r.vehicle_key === p.vehicle_key; })
+    return histOf(p.vehicle_key)
       .sort(function(a,b){ return String(b['วันที่ซ่อม']).localeCompare(String(a['วันที่ซ่อม'])); })
       .map(strip);
   },
   vehicle_summary: function(p){
-    var rows = getRows(SHEETS.HIST).filter(function(r){ return r.vehicle_key === p.vehicle_key; });
+    var rows = histOf(p.vehicle_key);
     var total = rows.reduce(function(s,r){ return s + (Number(r['จำนวนเงิน'])||0); }, 0);
     var last = rows.sort(function(a,b){ return String(b['วันที่ซ่อม']).localeCompare(String(a['วันที่ซ่อม'])); })[0] || null;
     return { times: rows.length, total: total, last: last ? strip(last) : null };
