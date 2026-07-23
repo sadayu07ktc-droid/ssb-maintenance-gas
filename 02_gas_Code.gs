@@ -645,9 +645,9 @@ function registerBubble(e){
     footer:{ type:'box', layout:'vertical', spacing:'sm', paddingAll:'14px', contents:[
       { type:'box', layout:'horizontal', spacing:'sm', contents:[
         { type:'button', style:'primary', height:'sm', color:'#22a06b',
-          action:{ type:'postback', label:'✓ อนุมัติ', data:pbData('uok', e.id), displayText:'✓ อนุมัติ ' + (e.full_name||'') } },
+          action:{ type:'postback', label:'✓ อนุมัติ', data:pbData('uok', e.emp_code), displayText:'✓ อนุมัติ ' + (e.full_name||'') } },
         { type:'button', style:'primary', height:'sm', color:'#e24b4a',
-          action:{ type:'postback', label:'✕ ปฏิเสธ', data:pbData('uno', e.id), displayText:'✕ ปฏิเสธ ' + (e.full_name||'') } }
+          action:{ type:'postback', label:'✕ ปฏิเสธ', data:pbData('uno', e.emp_code), displayText:'✕ ปฏิเสธ ' + (e.full_name||'') } }
       ]}
     ]}
   };
@@ -658,16 +658,26 @@ function roleTH(r){
   if(/approv|exec|manager|บริหาร/.test(r)) return 'Approver (ผู้อนุมัติ)';
   return 'User (พนักงานทั่วไป)';
 }
+/** หาพนักงานจากคีย์อะไรก็ได้ (id หรือ รหัสพนักงาน) — บางแถวในชีตยังไม่มี id */
+function empByAny(key){
+  if(!key) return null;
+  var k = String(key);
+  return getRows(SHEETS.EMP).filter(function(r){
+    return String(r.id) === k || String(r.emp_code) === k;
+  })[0] || null;
+}
 /** แจ้งแอดมินด้วยการ์ด — ถ้าสร้างไม่ได้ ตกกลับเป็นข้อความธรรมดา */
-function notifyRegisterCard(empId){
-  var e = getRows(SHEETS.EMP).filter(function(r){ return String(r.id) === String(empId); })[0];
+function notifyRegisterCard(key){
+  var e = empByAny(key);
   var ids = adminIds();
-  var txt = '🔔 มีคำขอลงทะเบียนใหม่: ' + (e?e.full_name:'') + ' (' + (e?e.emp_code:'') + ')';
+  var txt = e
+    ? ('🔔 มีคำขอลงทะเบียนใหม่: ' + e.full_name + ' (' + e.emp_code + ')' + (e.department?(' · '+e.department):''))
+    : ('🔔 มีคำขอลงทะเบียนใหม่ (ไม่พบข้อมูล: ' + key + ')');
   if(!e || !ids.length){ notifyAdmins(txt); return; }
   try{
     var b = registerBubble(e);
     ids.forEach(function(id){ pushFlex(id, txt, b); });
-  }catch(err){ notifyAdmins(txt); }
+  }catch(err){ notifyAdmins(txt + '\n(การ์ดผิดพลาด: ' + err + ')'); }
 }
 
 // ===== LINE webhook: กดปุ่มในแชตแล้วอนุมัติได้เลย =====
@@ -723,7 +733,7 @@ function handleLineEvents(events){
       if(!me2 || String(me2.active)!=='true' || !/admin/i.test(String(me2.role||''))){
         lineReply(reply, '⛔ เฉพาะแอดมินเท่านั้นที่อนุมัติการลงทะเบียนได้'); return;
       }
-      var u = getRows(SHEETS.EMP).filter(function(r){ return String(r.id) === String(d.t); })[0];
+      var u = empByAny(d.t);
       if(!u){ lineReply(reply, '❌ ไม่พบคำขอนี้'); return; }
       if(String(u.active) !== 'pending'){
         lineReply(reply, 'ℹ️ คำขอของ ' + u.full_name + ' ถูกดำเนินการไปแล้ว ('
@@ -732,11 +742,11 @@ function handleLineEvents(events){
       }
       if(d.act === 'uok'){
         var target = u.line_user_id;
-        approveUser({ emp_id:d.t });
+        patchEmp(u._row, { active:'true' });
         lineReply(reply, '✅ อนุมัติเรียบร้อย\n\n' + u.full_name + ' (' + u.emp_code + ')\nเข้าใช้งาน MySSB Connect ได้แล้ว\nโดย ' + (me2.full_name||''));
         try{ linePush(target, '🎉 ยินดีต้อนรับ ' + u.full_name + '\nบัญชีของคุณได้รับการอนุมัติแล้ว เปิดแอปใช้งานได้เลย\n' + liffUrl('')); }catch(e2){}
       } else {
-        rejectUser({ emp_id:d.t });
+        patchEmp(u._row, { active:'false', line_user_id:'' });
         lineReply(reply, '↩️ ปฏิเสธคำขอของ ' + u.full_name + ' แล้ว\nโดย ' + (me2.full_name||'') + '\n\nพนักงานสามารถลงทะเบียนใหม่ได้');
       }
       return;
