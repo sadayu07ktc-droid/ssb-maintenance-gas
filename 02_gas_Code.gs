@@ -445,7 +445,10 @@ var API = {
     var patch={ updated_at: now() };
     allow.forEach(function(k){ if(p[k]!==undefined) patch[k]=p[k]; });
     patchByTicket(SHEETS.REQ, p.ticket_no, patch);
-    logStatus(p.ticket_no, '', '', p.actor||'admin', 'แก้ไขข้อมูลใบแจ้งซ่อม');
+    // คงสถานะเดิมไว้ในบันทึก ไม่งั้นไทม์ไลน์จะขึ้นป้ายว่าง "-" (การแก้ไขไม่ได้เปลี่ยนสถานะ)
+    var _c = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === p.ticket_no; })[0];
+    var st = _c ? String(_c.status||'') : '';
+    logStatus(p.ticket_no, st, st, p.actor||'admin', 'แก้ไข/เพิ่มข้อมูลใบแจ้งซ่อม');
     try{ syncHistory(p.ticket_no, false); }catch(e){}  // อัปเดตแถวประวัติเดิม (ถ้าอนุมัติแล้ว)
     return { ok:true };
   },
