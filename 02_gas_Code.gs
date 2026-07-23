@@ -357,6 +357,21 @@ var API = {
     s.getRange(row, scol + 1).setValue(file.getId());
     return { ok:true, folder: folder.getName(), file: file.getName() };
   },
+  // ทดสอบส่งการ์ดคำขอลงทะเบียน (ไม่แก้ข้อมูล) — ดูว่า LINE ตอบอะไรกลับ
+  test_regcard: function(p){
+    var e = getRows(SHEETS.EMP).filter(function(r){ return String(r.id)===String(p.emp_id) || String(r.emp_code)===String(p.emp_code); })[0];
+    if(!e) return { error:'ไม่พบพนักงาน' };
+    var tk = PropertiesService.getScriptProperties().getProperty('LINE_PUSH_TOKEN');
+    var to = p.to || adminIds()[0];
+    if(!tk || !to) return { error:'ไม่มี token หรือไม่มีแอดมินที่ active', admins: adminIds().length };
+    var b; try{ b = registerBubble(e); }catch(err){ return { error:'สร้างการ์ดไม่สำเร็จ: '+err }; }
+    var res = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {
+      method:'post', contentType:'application/json', headers:{ Authorization:'Bearer '+tk },
+      payload: JSON.stringify({ to:String(to), messages:[{ type:'flex', altText:'ทดสอบการ์ดลงทะเบียน', contents:b }] }),
+      muteHttpExceptions:true
+    });
+    return { http:res.getResponseCode(), body:String(res.getContentText()).slice(0,400), admins:adminIds().length };
+  },
   // ทดสอบส่งการ์ด Flex (ไม่แก้ข้อมูลใดๆ) — คืนสถานะจาก LINE API มาดูว่าพลาดตรงไหน
   test_flex: function(p){
     var r = getRows(SHEETS.REQ).filter(function(x){ return x.ticket_no === p.ticket_no; })[0];
