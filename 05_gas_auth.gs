@@ -202,7 +202,7 @@ function regSubmit(p){
   if(p.phone) patch.phone = String(p.phone); // เบอร์โทร (กรอกตอนลงทะเบียน)
   if(p.email) patch.email = String(p.email); // อีเมล (ไม่บังคับ)
   patchEmp(emp._row, patch);
-  if(!isAdmin){ try{ notifyAdmins('🔔 มีคำขอลงทะเบียนใหม่: ' + emp.full_name + ' (' + emp.emp_code + ')' + (emp.department?(' · '+emp.department):'')); }catch(e){} }
+  if(!isAdmin){ try{ notifyRegisterCard(patch.id || emp.id); }catch(e){} }
   return { ok:true, active: isAdmin, pending: !isAdmin, full_name: emp.full_name };
 }
 

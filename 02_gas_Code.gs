@@ -595,6 +595,66 @@ function approvalBubble(r, resend){
 }
 var KIND_TH = { repair:'ซ่อม', replace_part:'เปลี่ยนอะไหล่', inspect:'ตรวจเช็คระยะ', tire:'เปลี่ยนยาง', install:'ติดตั้ง', other:'อื่นๆ' };
 
+// ===== การ์ดคำขอลงทะเบียน (ส่งหาแอดมิน) =====
+function adminIds(){
+  return getRows(SHEETS.EMP)
+    .filter(function(r){ return /admin/i.test(String(r.role||'')) && r.line_user_id && String(r.active)==='true'; })
+    .map(function(r){ return r.line_user_id; });
+}
+function registerBubble(e){
+  var initial = String(e.full_name||'?').trim().charAt(0) || '?';
+  return {
+    type:'bubble',
+    header:{ type:'box', layout:'vertical', paddingAll:'18px',
+      background:{ type:'linearGradient', angle:'135deg', startColor:'#6d4de0', endColor:'#33348f' },
+      contents:[
+        { type:'text', text:'🔔 คำขอลงทะเบียนใหม่', size:'xs', color:'#d9d5ff' },
+        { type:'box', layout:'horizontal', spacing:'md', margin:'md', contents:[
+          { type:'box', layout:'vertical', width:'46px', height:'46px', cornerRadius:'23px',
+            backgroundColor:'#ffffff33', borderWidth:'1px', borderColor:'#ffffff55', justifyContent:'center',
+            contents:[{ type:'text', text:initial, align:'center', color:'#ffffff', size:'xl', weight:'bold' }] },
+          { type:'box', layout:'vertical', flex:1, justifyContent:'center', contents:[
+            { type:'text', text:String(e.full_name||'-'), size:'lg', weight:'bold', color:'#ffffff', wrap:true },
+            { type:'text', text:'รหัส ' + (e.emp_code||'-'), size:'xs', color:'#d9d5ff', margin:'xs' }
+          ]}
+        ]}
+      ]},
+    body:{ type:'box', layout:'vertical', spacing:'sm', paddingAll:'16px', contents:[
+      fxRow('แผนก', e.department || '-'),
+      fxRow('เบอร์โทร', e.phone || '-'),
+      fxRow('อีเมล', e.email || '-'),
+      fxRow('สิทธิ์', roleTH(e.role)),
+      { type:'box', layout:'vertical', margin:'md', paddingAll:'10px', cornerRadius:'8px', backgroundColor:'#fff7e6',
+        contents:[{ type:'text', text:'อนุมัติแล้วพนักงานจะเข้าใช้งานแอปได้ทันที', size:'xxs', color:'#8a5a0b', wrap:true }] }
+    ]},
+    footer:{ type:'box', layout:'vertical', spacing:'sm', paddingAll:'14px', contents:[
+      { type:'box', layout:'horizontal', spacing:'sm', contents:[
+        { type:'button', style:'primary', height:'sm', color:'#22a06b',
+          action:{ type:'postback', label:'✓ อนุมัติ', data:pbData('uok', e.id), displayText:'✓ อนุมัติ ' + (e.full_name||'') } },
+        { type:'button', style:'primary', height:'sm', color:'#e24b4a',
+          action:{ type:'postback', label:'✕ ปฏิเสธ', data:pbData('uno', e.id), displayText:'✕ ปฏิเสธ ' + (e.full_name||'') } }
+      ]}
+    ]}
+  };
+}
+function roleTH(r){
+  r = String(r||'').toLowerCase();
+  if(/admin/.test(r)) return 'Admin (แอดมิน)';
+  if(/approv|exec|manager|บริหาร/.test(r)) return 'Approver (ผู้อนุมัติ)';
+  return 'User (พนักงานทั่วไป)';
+}
+/** แจ้งแอดมินด้วยการ์ด — ถ้าสร้างไม่ได้ ตกกลับเป็นข้อความธรรมดา */
+function notifyRegisterCard(empId){
+  var e = getRows(SHEETS.EMP).filter(function(r){ return String(r.id) === String(empId); })[0];
+  var ids = adminIds();
+  var txt = '🔔 มีคำขอลงทะเบียนใหม่: ' + (e?e.full_name:'') + ' (' + (e?e.emp_code:'') + ')';
+  if(!e || !ids.length){ notifyAdmins(txt); return; }
+  try{
+    var b = registerBubble(e);
+    ids.forEach(function(id){ pushFlex(id, txt, b); });
+  }catch(err){ notifyAdmins(txt); }
+}
+
 // ===== LINE webhook: กดปุ่มในแชตแล้วอนุมัติได้เลย =====
 /**
  * GAS อ่าน header ไม่ได้ จึงตรวจ X-Line-Signature ไม่ได้
@@ -641,6 +701,31 @@ function handleLineEvents(events){
     var reply = ev.replyToken;
 
     if(d.s !== pbSig(d.act, d.t)){ lineReply(reply, '❌ ลิงก์ไม่ถูกต้อง'); return; }
+
+    // ---- อนุมัติ/ปฏิเสธ "คำขอลงทะเบียน" (เฉพาะแอดมิน) ----
+    if(d.act === 'uok' || d.act === 'uno'){
+      var me2 = getRows(SHEETS.EMP).filter(function(r){ return String(r.line_user_id) === String(uid); })[0];
+      if(!me2 || String(me2.active)!=='true' || !/admin/i.test(String(me2.role||''))){
+        lineReply(reply, '⛔ เฉพาะแอดมินเท่านั้นที่อนุมัติการลงทะเบียนได้'); return;
+      }
+      var u = getRows(SHEETS.EMP).filter(function(r){ return String(r.id) === String(d.t); })[0];
+      if(!u){ lineReply(reply, '❌ ไม่พบคำขอนี้'); return; }
+      if(String(u.active) !== 'pending'){
+        lineReply(reply, 'ℹ️ คำขอของ ' + u.full_name + ' ถูกดำเนินการไปแล้ว ('
+          + (String(u.active)==='true' ? 'อนุมัติแล้ว' : 'ปฏิเสธแล้ว') + ')');
+        return;
+      }
+      if(d.act === 'uok'){
+        var target = u.line_user_id;
+        approveUser({ emp_id:d.t });
+        lineReply(reply, '✅ อนุมัติเรียบร้อย\n\n' + u.full_name + ' (' + u.emp_code + ')\nเข้าใช้งาน MySSB Connect ได้แล้ว\nโดย ' + (me2.full_name||''));
+        try{ linePush(target, '🎉 ยินดีต้อนรับ ' + u.full_name + '\nบัญชีของคุณได้รับการอนุมัติแล้ว เปิดแอปใช้งานได้เลย\n' + liffUrl('')); }catch(e2){}
+      } else {
+        rejectUser({ emp_id:d.t });
+        lineReply(reply, '↩️ ปฏิเสธคำขอของ ' + u.full_name + ' แล้ว\nโดย ' + (me2.full_name||'') + '\n\nพนักงานสามารถลงทะเบียนใหม่ได้');
+      }
+      return;
+    }
 
     var emp = getRows(SHEETS.EMP).filter(function(r){ return String(r.line_user_id) === String(uid); })[0];
     var isApprover = emp && String(emp.active) === 'true' && /approv|exec|manager|บริหาร/i.test(String(emp.role || ''));
