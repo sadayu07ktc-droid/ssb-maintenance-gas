@@ -157,7 +157,7 @@ function genPdf(ticketNo){
   SpreadsheetApp.flush();
 
   // ล้าง rich-text ที่ import จาก Excel + ตั้งขนาดฟอนต์ช่องค่าให้เท่ากัน (กันฟอนต์เพี้ยน)
-  var VAL_FONT = 11;
+  var VAL_FONT = 10;   // ช่องหัวกระดาษเล็กลงหน่อย จะได้ไม่ล้นกรอบ
   ['G3','M3','R3','G4','N4','H5','N5','E7','K7','E8','E9','E10','B14','M14','S14','B16','B22'].forEach(function(a1){
     try{
       var c = tmp.getRange(a1), v = c.getValue();
@@ -165,6 +165,28 @@ function genPdf(ticketNo){
       v = (v instanceof Date) ? Utilities.formatDate(v, TZ, 'dd-MM-yyyy') : String(v == null ? '' : v);
       c.setNumberFormat('@'); c.setValue(v);
       c.setFontSize(VAL_FONT).setFontFamily('Sarabun');
+    }catch(e){}
+  });
+  // หัวข้อ "น้ำมันพืช / น้ำมันปาล์ม / อื่นๆ" แถวบนสุด — ลดขนาดลงให้อยู่ในบรรทัดเดียว
+  ['H2','K2','P2'].forEach(function(a1){
+    try{ tmp.getRange(a1).setFontSize(10).setFontFamily('Sarabun'); }catch(e){}
+  });
+
+  /* ช่องข้อความยาว (อาการ / สาเหตุ / การแก้ไข)
+   * ในฟอร์มต้นฉบับช่องค่าสูงแค่ 1 แถว ข้อความยาวจึงล้นหายไป
+   * -> ขยายให้กินหลายแถว (ตามกรอบที่ฟอร์มเว้นไว้) + สั่งตัดขึ้นบรรทัดใหม่
+   */
+  [['E10','E10:S13'], ['B16','B16:S19'], ['B22','B22:S26']].forEach(function(p){
+    try{
+      var rng = tmp.getRange(p[1]);
+      try{ rng.breakApart(); }catch(e){}    // ถ้าเคย merge ไว้แล้วต้องแยกก่อน
+      rng.merge();
+    }catch(e){}
+    try{
+      tmp.getRange(p[0])
+        .setWrap(true)
+        .setWrapStrategy(SpreadsheetApp.WrapStrategy.WRAP)
+        .setVerticalAlignment('top');
     }catch(e){}
   });
   SpreadsheetApp.flush();
