@@ -157,8 +157,9 @@ function genPdf(ticketNo){
   SpreadsheetApp.flush();
 
   // ล้าง rich-text ที่ import จาก Excel + ตั้งขนาดฟอนต์ช่องค่าให้เท่ากัน (กันฟอนต์เพี้ยน)
-  var VAL_FONT = 10;   // ช่องหัวกระดาษเล็กลงหน่อย จะได้ไม่ล้นกรอบ
-  ['G3','M3','R3','G4','N4','H5','N5','E7','K7','E8','E9','E10','B14','M14','S14','B16','B22'].forEach(function(a1){
+  var VAL_FONT = 11;
+  // G5 = "ซ่อมโดยช่างภายใน" (เดิมเขียนผิดเป็น H5 ช่องนี้เลยค้างฟอนต์ใหญ่ตัวหนาจาก Excel)
+  ['G3','M3','R3','G4','N4','G5','N5','E7','K7','E8','E9','E10','B14','M14','S14','B16','B22'].forEach(function(a1){
     try{
       var c = tmp.getRange(a1), v = c.getValue();
       // ถ้า Sheets แปลงเป็นวันที่ไปแล้ว ให้เขียนกลับเป็น dd-mm-yyyy (ไม่ใช่ Tue Jul 21 2026 …)
@@ -166,6 +167,10 @@ function genPdf(ticketNo){
       c.setNumberFormat('@'); c.setValue(v);
       c.setFontSize(VAL_FONT).setFontFamily('Sarabun');
     }catch(e){}
+  });
+  // สองบรรทัดนี้เป็นคู่กัน ต้องหน้าตาเหมือนกัน (เดิมฝั่งซ้ายตัวหนาใหญ่กว่าฝั่งขวามาก)
+  ['G5','N5'].forEach(function(a1){
+    try{ tmp.getRange(a1).setFontWeight('normal').setFontSize(VAL_FONT).setVerticalAlignment('middle'); }catch(e){}
   });
   // หัวข้อ "น้ำมันพืช / น้ำมันปาล์ม / อื่นๆ" แถวบนสุด — ลดขนาดลงให้อยู่ในบรรทัดเดียว
   ['H2','K2','P2'].forEach(function(a1){
