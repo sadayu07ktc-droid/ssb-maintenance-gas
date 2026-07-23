@@ -186,6 +186,11 @@ function regLookup(p){
 // (2) ยืนยันวันเกิด → ผูก LINE + ตั้งสถานะรออนุมัติ (active='pending')
 function regSubmit(p){
   ensureAuthCols();
+  // ต้องเป็น LINE user id จริงเท่านั้น ('dev-user' = เปิดนอกแอป LINE)
+  // ถ้าปล่อยผ่าน บัญชีจะผูกกับ id ปลอม เจ้าตัวจะเข้าใช้จาก LINE ไม่ได้ และใครเปิดเว็บก็สวมสิทธิ์ได้
+  if(!/^U[0-9a-f]{32}$/i.test(String(p.line_user_id || ''))){
+    return { ok:false, error:'กรุณาเปิดลิงก์ในแอป LINE เท่านั้น (ไม่พบบัญชี LINE)' };
+  }
   var emp = empByCode(p.emp_code);
   if(!emp) return { ok:false, error:'ไม่พบรหัสพนักงาน' };
   if(emp.line_user_id && String(emp.active) === 'true') return { ok:false, error:'รหัสนี้ลงทะเบียนแล้ว' };

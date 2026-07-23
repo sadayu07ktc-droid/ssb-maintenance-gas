@@ -201,6 +201,8 @@ function route(action, p){
 var API = {
   ping: function(){ return { pong: now() }; },
   me: function(p){
+    // รับเฉพาะ LINE user id จริง — กันคนเปิดผ่านเบราว์เซอร์แล้วสวมสิทธิ์แถวที่ผูก id ปลอมไว้
+    if(!/^U[0-9a-f]{32}$/i.test(String(p.line_user_id || ''))) return { role:'requester', unknown:true, no_line:true };
     var u = getRows(SHEETS.EMP).filter(function(r){ return r.line_user_id === p.line_user_id; })[0];
     return u || { role: 'requester', unknown: true };
   },
