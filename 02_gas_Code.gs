@@ -230,6 +230,7 @@ var API = {
     appendObj(SHEETS.REQ, rec);
     logStatus(t, '', rec.status, p.requester_id || '', byAdmin ? 'แอดมินแจ้งเอง → ส่งอนุมัติเลย' : '');
     if(rec.status === 'pending_approval') notifyApprovalCard(t, false);
+    else notifyAdminNewTicket(t);          // ① ใบใหม่รอแอดมินตรวจ — ไม่งั้นไม่มีใครรู้ว่ามีใบเข้ามา
     return { ticket_no: t, status: rec.status };
   },
   pending_approvals: function(){
@@ -321,6 +322,7 @@ var API = {
     var pdfUrl='';
     try{ pdfUrl = genPdf(p.ticket_no); }catch(e){ pdfUrl = 'PDF error: ' + e; }
     linePush(cur.requester_id, '✅ ใบแจ้งซ่อม ' + p.ticket_no + ' ได้รับการอนุมัติแล้ว');
+    try{ notifyAdminDecision(p.ticket_no, true, p.approver_line_id, '', pdfUrl); }catch(e){}   // ②
     return { ok:true, todo: task, pdf_url: pdfUrl };
   },
   gen_pdf: function(p){ return { pdf_url: genPdf(p.ticket_no) }; },
@@ -434,6 +436,7 @@ var API = {
       approver_id: p.approver_line_id||'', updated_at: now() });
     logStatus(p.ticket_no, cur?cur.status:'', 'rejected', p.approver_line_id||'', p.reason||'');
     if(cur) linePush(cur.requester_id, '❌ ใบแจ้งซ่อม ' + p.ticket_no + ' ไม่ได้รับการอนุมัติ' + (p.reason?(' · '+p.reason):''));
+    try{ notifyAdminDecision(p.ticket_no, false, p.approver_line_id, p.reason||'', ''); }catch(e){}   // ③
     return { ok:true };
   },
   // แก้ไข/เติมรายละเอียดใบแจ้งซ่อม (แอดมิน) — เติมข้อมูลก่อนออก PDF
@@ -522,9 +525,9 @@ function linePush(to, text){
     });
   }catch(e){}
 }
-function notifyAdmins(text){
-  getRows(SHEETS.EMP).filter(function(r){ return /admin/i.test(String(r.role||'')) && r.line_user_id && String(r.active)==='true'; })
-    .forEach(function(a){ linePush(a.line_user_id, text); });
+// except = line_user_id ของคนที่เป็นต้นเรื่อง จะได้ไม่แจ้งเตือนกลับไปหาตัวเอง
+function notifyAdmins(text, except){
+  adminIds().forEach(function(id){ if(String(id) !== String(except||'')) linePush(id, text); });
 }
 function notifyApprovers(text){
   approverIds().forEach(function(id){ linePush(id, text); });
@@ -657,6 +660,37 @@ function roleTH(r){
   if(/admin/.test(r)) return 'Admin (แอดมิน)';
   if(/approv|exec|manager|บริหาร/.test(r)) return 'Approver (ผู้อนุมัติ)';
   return 'User (พนักงานทั่วไป)';
+}
+/** ① ใบแจ้งซ่อมใหม่เข้าคิว "รอแอดมินตรวจ" -> แจ้งแอดมินพร้อมปุ่มเปิดใบ */
+function notifyAdminNewTicket(ticketNo){
+  var r = getRows(SHEETS.REQ).filter(function(x){ return x.ticket_no === ticketNo; })[0];
+  var ids = adminIds();
+  if(!r || !ids.length) return;
+  var txt = '📥 ใบแจ้งซ่อมใหม่ รอตรวจ: ' + ticketNo;
+  try{
+    var b = approvalBubble(r, false);
+    // เปลี่ยนหัวการ์ด + ปุ่ม ให้เป็นมุมของแอดมิน (ตรวจแล้วส่งต่อ ไม่ใช่อนุมัติ)
+    b.header.contents[0].text = '📥 ใบแจ้งซ่อมใหม่ — รอแอดมินตรวจ';
+    b.footer.contents = [
+      { type:'button', style:'primary', height:'sm', color:'#33348f',
+        action:{ type:'uri', label:'เปิดใบงาน / ตรวจสอบ', uri:liffUrl('t=' + ticketNo) } }
+    ];
+    ids.forEach(function(id){ if(String(id)!==String(r.requester_id||'')) pushFlex(id, txt, b); });
+  }catch(e){ notifyAdmins(txt, r.requester_id); }
+}
+/** ②③ ผลการอนุมัติ -> แจ้งแอดมินด้วย (แอดมินคือคนทำงานต่อ) */
+function notifyAdminDecision(ticketNo, ok, by, reason, pdf){
+  var r = getRows(SHEETS.REQ).filter(function(x){ return x.ticket_no === ticketNo; })[0];
+  var who = by ? empNameByLine(by) : '';
+  var head = ok ? ('✅ อนุมัติแล้ว: ' + ticketNo) : ('❌ ไม่อนุมัติ: ' + ticketNo);
+  var lines = [head];
+  if(r) lines.push((r.vehicle_key || r.machine_name || '') + ' · ' + baht(r.amount) + ' บาท');
+  if(who) lines.push('โดย ' + who);
+  if(!ok && reason) lines.push('เหตุผล: ' + reason);
+  lines.push(ok ? 'ดำเนินการต่อได้เลย' : 'แก้ไขตามเหตุผลแล้วส่งอนุมัติใหม่ได้');
+  if(ok && /^https?:/.test(String(pdf||''))) lines.push('📄 ใบงาน: ' + pdf);
+  else lines.push(liffUrl('t=' + ticketNo));
+  notifyAdmins(lines.join('\n'), by);   // ผู้อนุมัติที่เป็นแอดมินด้วย ไม่ต้องแจ้งซ้ำ
 }
 /** หาพนักงานจากคีย์อะไรก็ได้ (id หรือ รหัสพนักงาน) — บางแถวในชีตยังไม่มี id */
 function empByAny(key){
