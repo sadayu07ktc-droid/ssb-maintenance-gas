@@ -463,7 +463,7 @@ var API = {
   },
   // แก้ไข/เติมรายละเอียดใบแจ้งซ่อม (แอดมิน) — เติมข้อมูลก่อนออก PDF
   edit_request: function(p){
-    var allow=['symptom','cause','cause_type','fix_detail','prevention','amount','mileage','service_interval_km','vendor','machine_code','machine_name','department','requester_name','due_date','receipt_no','contamination'];
+    var allow=['symptom','cause','cause_type','fix_detail','prevention','amount','mileage','service_interval_km','vendor','machine_code','machine_name','department','requester_name','due_date','receipt_no','contamination','request_type','request_kind','repair_by','asset_category'];
     var patch={ updated_at: now() };
     allow.forEach(function(k){ if(p[k]!==undefined) patch[k]=p[k]; });
     patchByTicket(SHEETS.REQ, p.ticket_no, patch);
