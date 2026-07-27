@@ -660,9 +660,9 @@ function registerBubble(e){
 }
 function roleTH(r){
   r = String(r||'').toLowerCase();
-  if(/admin/.test(r)) return 'Admin (แอดมิน)';
-  if(/approv|exec|manager|บริหาร/.test(r)) return 'Approver (ผู้อนุมัติ)';
-  return 'User (พนักงานทั่วไป)';
+  if(/admin/.test(r)) return 'Admin';
+  if(/approv|exec|manager|บริหาร/.test(r)) return 'Approver';
+  return 'User';
 }
 /** ① ใบแจ้งซ่อมใหม่เข้าคิว "รอแอดมินตรวจ" -> แจ้งแอดมินพร้อมปุ่มเปิดใบ */
 function notifyAdminNewTicket(ticketNo){
