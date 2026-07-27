@@ -289,6 +289,28 @@ var API = {
     if(isResend && cur) linePush(cur.requester_id, '🔁 ใบแจ้งซ่อม ' + p.ticket_no + ' แก้ไขแล้ว ส่งให้ผู้อนุมัติอีกครั้ง');
     return { ok:true, resend: isResend };
   },
+  // แอดมินตีกลับใบให้ผู้แจ้งแก้ไข (ก่อนส่งอนุมัติ) พร้อมเหตุผล
+  return_ticket: function(p){
+    var cur = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === p.ticket_no; })[0];
+    patchByTicket(SHEETS.REQ, p.ticket_no, { status:'returned', rejected_reason: p.reason||'', updated_at: now() });
+    var rev = revisionCount(p.ticket_no) + 1;   // ครั้งที่จะตีกลับนี้
+    logStatus(p.ticket_no, cur?cur.status:'', 'returned', p.actor||'admin',
+      'แอดมินตีกลับให้แก้ไข (ครั้งที่ ' + rev + '): ' + (p.reason||''));
+    try{ notifyReturnCard(p.ticket_no, p.reason, rev); }catch(e){}
+    return { ok:true, revision: rev };
+  },
+  // ผู้แจ้งแก้ไขแล้วส่งกลับ -> กลับไปสถานะรอแอดมินตรวจ
+  resubmit_ticket: function(p){
+    var cur = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === p.ticket_no; })[0];
+    if(!cur) throw 'ไม่พบใบ ' + p.ticket_no;
+    if(String(cur.requester_id) !== String(p.requester_id)) throw 'ไม่ใช่เจ้าของใบนี้';
+    patchByTicket(SHEETS.REQ, p.ticket_no, { status:'submitted', rejected_reason:'', updated_at: now() });
+    var rev = revisionCount(p.ticket_no);
+    logStatus(p.ticket_no, 'returned', 'submitted', p.requester_id||'',
+      'ผู้แจ้งแก้ไขแล้ว (ครั้งที่ ' + rev + ') ส่งกลับให้แอดมิน');
+    try{ notifyAdminReturned(p.ticket_no, rev); }catch(e){}
+    return { ok:true, revision: rev };
+  },
   logs: function(p){
     return getRows(SHEETS.LOG).filter(function(r){ return r.ticket_no === p.ticket_no; })
       .sort(function(a,b){ return String(a.created_at).localeCompare(String(b.created_at)); }).map(strip);
@@ -663,6 +685,55 @@ function roleTH(r){
   if(/admin/.test(r)) return 'Admin';
   if(/approv|exec|manager|บริหาร/.test(r)) return 'Approver';
   return 'User';
+}
+// จำนวนครั้งที่ใบถูกตีกลับ (นับจาก StatusLogs)
+function revisionCount(ticketNo){
+  return getRows(SHEETS.LOG).filter(function(l){
+    return l.ticket_no === ticketNo && String(l.to_status) === 'returned';
+  }).length;
+}
+/** การ์ดตีกลับ -> ส่งหาผู้แจ้ง ให้แก้ไขแล้วส่งกลับ */
+function notifyReturnCard(ticketNo, reason, rev){
+  var r = getRows(SHEETS.REQ).filter(function(x){ return x.ticket_no === ticketNo; })[0];
+  if(!r || !r.requester_id) return;
+  var asset = r.vehicle_key
+    ? (function(){ var v=getRows(SHEETS.VEH).filter(function(x){return x.vehicle_key===r.vehicle_key;})[0]; return [r.vehicle_key, v&&v['ยี่ห้อ_รุ่น'], v&&v.plate_current].filter(Boolean).join(' · '); })()
+    : [r.machine_name, r.machine_code && ('ห้อง '+r.machine_code)].filter(Boolean).join(' · ');
+  var bubble = {
+    type:'bubble',
+    header:{ type:'box', layout:'vertical', backgroundColor:'#e24b4a', paddingAll:'14px', contents:[
+      { type:'text', text:'↩️ ใบแจ้งซ่อมถูกตีกลับให้แก้ไข' + (rev>1?(' · ครั้งที่ '+rev):''), size:'xs', color:'#ffe0e0' },
+      { type:'text', text:String(ticketNo), size:'lg', weight:'bold', color:'#ffffff' }
+    ]},
+    body:{ type:'box', layout:'vertical', spacing:'sm', paddingAll:'16px', contents:[
+      fxRow('รายการ', asset || '-'),
+      { type:'box', layout:'vertical', margin:'md', paddingAll:'11px', cornerRadius:'8px', backgroundColor:'#fdecec', contents:[
+        { type:'text', text:'เหตุผลที่ตีกลับ', size:'xxs', color:'#a32d2d', weight:'bold' },
+        { type:'text', text:String(reason || 'ไม่ได้ระบุ'), size:'sm', color:'#8a2020', wrap:true, margin:'xs' }
+      ]},
+      { type:'text', text:'แตะปุ่มด้านล่างเพื่อแก้ไขข้อมูล แล้วส่งกลับให้แอดมินตรวจอีกครั้ง', size:'xxs', color:'#8a8ca3', wrap:true, margin:'md' }
+    ]},
+    footer:{ type:'box', layout:'vertical', paddingAll:'12px', contents:[
+      { type:'button', style:'primary', height:'sm', color:'#33348f',
+        action:{ type:'uri', label:'✏️ แก้ไขใบแจ้งซ่อม', uri:liffUrl('t=' + ticketNo) } }
+    ]}
+  };
+  try{ pushFlex(r.requester_id, '↩️ ใบ ' + ticketNo + ' ถูกตีกลับให้แก้ไข', bubble); }
+  catch(e){ linePush(r.requester_id, '↩️ ใบแจ้งซ่อม ' + ticketNo + ' ถูกตีกลับให้แก้ไข\nเหตุผล: ' + (reason||'') + '\n' + liffUrl('t='+ticketNo)); }
+}
+/** ผู้แจ้งแก้ไขแล้วส่งกลับ -> แจ้งแอดมิน */
+function notifyAdminReturned(ticketNo, rev){
+  var r = getRows(SHEETS.REQ).filter(function(x){ return x.ticket_no === ticketNo; })[0];
+  var ids = adminIds();
+  if(!r || !ids.length) return;
+  var txt = '🔄 ผู้แจ้งแก้ไขแล้ว (ครั้งที่ ' + rev + ') รอตรวจอีกครั้ง: ' + ticketNo;
+  try{
+    var b = approvalBubble(r, false);
+    b.header.contents[0].text = '🔄 แก้ไขแล้ว — รอแอดมินตรวจอีกครั้ง (ครั้งที่ ' + rev + ')';
+    b.footer.contents = [ { type:'button', style:'primary', height:'sm', color:'#33348f',
+      action:{ type:'uri', label:'เปิดใบงาน / ตรวจสอบ', uri:liffUrl('t=' + ticketNo) } } ];
+    ids.forEach(function(id){ pushFlex(id, txt, b); });
+  }catch(e){ notifyAdmins(txt); }
 }
 /** ① ใบแจ้งซ่อมใหม่เข้าคิว "รอแอดมินตรวจ" -> แจ้งแอดมินพร้อมปุ่มเปิดใบ */
 function notifyAdminNewTicket(ticketNo){
