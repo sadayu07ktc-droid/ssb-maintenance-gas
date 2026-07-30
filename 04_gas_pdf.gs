@@ -85,7 +85,9 @@ function baht(v){ v = String(v==null?'':v).replace(/,/g,'');
 }
 function ddmmyyyy(d){ var p = String(d||'').slice(0,10).split('-'); return p.length===3 ? (p[2]+'-'+p[1]+'-'+p[0]) : String(d||''); }
 
-function kindLine(v){ return chk(v,'repair')+' ซ่อม   '+chk(v,'replace_part')+' เปลี่ยนอะไหล่   '+chk(v,'inspect')+' ตรวจเช็ค   '+chk(v,'tire')+' เปลี่ยนยาง   '+chk(v,'install')+' ติดตั้ง   '+chk(v,'other')+' อื่นๆ'; }
+// ฟอร์ม FM-EN-04 ไม่มีช่อง "ปะยาง" -> ติ๊กช่อง "อื่นๆ" (รายละเอียดอยู่ในช่องอาการ)
+function kindLine(v){ if(v==='patch') v='other';
+  return chk(v,'repair')+' ซ่อม   '+chk(v,'replace_part')+' เปลี่ยนอะไหล่   '+chk(v,'inspect')+' ตรวจเช็ค   '+chk(v,'tire')+' เปลี่ยนยาง   '+chk(v,'install')+' ติดตั้ง   '+chk(v,'other')+' อื่นๆ'; }
 function catLine(v){ return chk(v,'machine')+' เครื่องจักร   '+chk(v,'electrical')+' ระบบไฟฟ้า   '+chk(v,'building')+' อาคาร-สถานที่   '+chk(v,'vehicle')+' รถ   '+chk(v,'other')+' อื่นๆ'; }
 
 /** สร้างชุดค่าที่จะพิมพ์ลงฟอร์ม (แยกออกมาเพื่อให้ตรวจสอบได้โดยไม่ต้องสร้างไฟล์) */

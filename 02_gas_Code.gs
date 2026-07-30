@@ -636,7 +636,7 @@ function approvalBubble(r, resend){
     ]}
   };
 }
-var KIND_TH = { repair:'ซ่อม', replace_part:'เปลี่ยนอะไหล่', inspect:'ตรวจเช็คระยะ', tire:'เปลี่ยนยาง', install:'ติดตั้ง', other:'อื่นๆ' };
+var KIND_TH = { repair:'ซ่อม', replace_part:'เปลี่ยนอะไหล่', inspect:'ตรวจเช็คระยะ', tire:'เปลี่ยนยาง', patch:'ปะยาง', install:'ติดตั้ง', other:'อื่นๆ' };
 
 // ===== การ์ดคำขอลงทะเบียน (ส่งหาแอดมิน) =====
 function adminIds(){
