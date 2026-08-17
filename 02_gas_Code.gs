@@ -410,6 +410,21 @@ var API = {
     s.getRange(row, scol + 1).setValue(file.getId());
     return { ok:true, folder: folder.getName(), file: file.getName() };
   },
+  // ตรวจบัญชี/ใบที่ติด dev-user หรือชื่อทดสอบ
+  dev_audit: function(){
+    var emp = getRows(SHEETS.EMP);
+    var badEmp = emp.filter(function(r){
+      var l=String(r.line_user_id||''); var n=String(r.full_name||'');
+      return (l && !/^U[0-9a-f]{32}$/i.test(l)) || /dev|ทดสอบ|test/i.test(n) || /dev|ทดสอบ|test/i.test(l);
+    }).map(function(r){ return { line:String(r.line_user_id||'').slice(0,12), name:r.full_name, role:r.role, active:r.active }; });
+    var req = getRows(SHEETS.REQ);
+    var badReq = req.filter(function(r){
+      var l=String(r.requester_id||''); var n=String(r.requester_name||'');
+      return (l && !/^U[0-9a-f]{32}$/i.test(l)) || /dev|ทดสอบ|test/i.test(n);
+    }).map(function(r){ return { ticket:r.ticket_no, req:String(r.requester_id||'').slice(0,12), name:r.requester_name }; });
+    return { employees_total:emp.length, dev_employees:badEmp.length, list:badEmp,
+             requests_total:req.length, dev_requests:badReq.length, req_list:badReq };
+  },
   // ทดสอบส่งการ์ดคำขอลงทะเบียน (ไม่แก้ข้อมูล) — ดูว่า LINE ตอบอะไรกลับ
   test_regcard: function(p){
     var e = getRows(SHEETS.EMP).filter(function(r){ return String(r.id)===String(p.emp_id) || String(r.emp_code)===String(p.emp_code); })[0];
