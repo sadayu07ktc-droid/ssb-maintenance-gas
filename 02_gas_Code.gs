@@ -192,6 +192,18 @@ function roleByLine(lineId){
 function isAdminLine(lineId){ return /admin/i.test(roleByLine(lineId)); }
 function isApproverLine(lineId){ return /approv|exec|manager|บริหาร/i.test(roleByLine(lineId)); }
 function isPrivLine(lineId){ return isAdminLine(lineId) || isApproverLine(lineId); }   // แอดมิน หรือ ผู้อนุมัติ
+// พนักงานคนนี้มีสิทธิ์แจ้งซ่อมรถคันนี้ไหม (จากคอลัมน์ ผู้แจ้ง/ผู้รับผิดชอบ ในชีต Vehicles)
+function vehAllows(veh, emp){
+  var raw = String(veh['ผู้แจ้ง'] || veh['ผู้รับผิดชอบ'] || '');
+  if(!raw.trim()) return false;
+  var code = String(emp.emp_code||'').trim();
+  var name = String(emp.full_name||'').replace(/\s/g,'').toLowerCase();
+  return raw.split(/[,\/]/).map(function(x){ return x.trim(); }).filter(Boolean).some(function(x){
+    if(code && x === code) return true;
+    var xn = x.replace(/\s/g,'').toLowerCase();
+    return xn && (name.indexOf(xn)>=0 || xn.indexOf(name)>=0);
+  });
+}
 function denyIf(cond, msg){ if(cond) throw (msg || 'ไม่มีสิทธิ์ทำรายการนี้'); }
 
 // ===== API ROUTER =====
@@ -236,6 +248,12 @@ var API = {
     // ต้องเป็นพนักงานที่ลงทะเบียน+active แล้วเท่านั้น (กัน dev-user / คนไม่ได้ลงทะเบียนแจ้งเข้ามา)
     var emp0 = getRows(SHEETS.EMP).filter(function(r){ return String(r.line_user_id) === String(p.requester_id) && String(r.active)==='true'; })[0];
     denyIf(!emp0, 'บัญชียังไม่ได้ลงทะเบียน — กรุณาลงทะเบียนก่อนแจ้งซ่อม');
+    // แจ้งซ่อมรถ: พนักงานทั่วไปแจ้งได้เฉพาะรถที่ตัวเองมีสิทธิ์ (แอดมิน/ผู้อนุมัติแจ้งได้ทุกคัน)
+    var privReq = /admin/i.test(String(emp0.role||'')) || /approv|exec|manager|บริหาร/i.test(String(emp0.role||''));
+    if(p.vehicle_key && !privReq){
+      var veh0 = getRows(SHEETS.VEH).filter(function(x){ return x.vehicle_key === p.vehicle_key; })[0];
+      denyIf(!veh0 || !vehAllows(veh0, emp0), 'คุณไม่มีสิทธิ์แจ้งซ่อมรถคันนี้ — ติดต่อ HR');
+    }
     var t = ticketNo();
     var rec = { ticket_no: t, reported_at: now(), created_at: now(), updated_at: now() };
     HEADERS.Requests.forEach(function(h){ if(p[h] !== undefined) rec[h] = p[h]; });
