@@ -180,6 +180,20 @@ function logStatus(ticket, from, to, actor, note){
     actor: actor||'', note: note||'', created_at: now() });
 }
 
+// ===== ตรวจสิทธิ์จาก LINE user id (ฝั่งเซิร์ฟเวอร์) =====
+// การล็อกเมนูฝั่งแอปเป็นแค่ความสวยงาม — ด่านจริงต้องอยู่ตรงนี้
+function roleByLine(lineId){
+  if(!/^U[0-9a-f]{32}$/i.test(String(lineId||''))) return '';   // ต้องเป็น LINE id จริงเท่านั้น
+  var e = getRows(SHEETS.EMP).filter(function(r){
+    return String(r.line_user_id) === String(lineId) && String(r.active) === 'true';
+  })[0];
+  return e ? String(e.role || '') : '';
+}
+function isAdminLine(lineId){ return /admin/i.test(roleByLine(lineId)); }
+function isApproverLine(lineId){ return /approv|exec|manager|บริหาร/i.test(roleByLine(lineId)); }
+function isPrivLine(lineId){ return isAdminLine(lineId) || isApproverLine(lineId); }   // แอดมิน หรือ ผู้อนุมัติ
+function denyIf(cond, msg){ if(cond) throw (msg || 'ไม่มีสิทธิ์ทำรายการนี้'); }
+
 // ===== API ROUTER =====
 function json(o){ return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
 function doGet(e){ e = e || {}; return route((e.parameter||{}).action, e.parameter||{}); }
@@ -219,13 +233,18 @@ var API = {
     return { times: rows.length, total: total, last: last ? strip(last) : null };
   },
   submit_request: function(p){
+    // ต้องเป็นพนักงานที่ลงทะเบียน+active แล้วเท่านั้น (กัน dev-user / คนไม่ได้ลงทะเบียนแจ้งเข้ามา)
+    var emp0 = getRows(SHEETS.EMP).filter(function(r){ return String(r.line_user_id) === String(p.requester_id) && String(r.active)==='true'; })[0];
+    denyIf(!emp0, 'บัญชียังไม่ได้ลงทะเบียน — กรุณาลงทะเบียนก่อนแจ้งซ่อม');
     var t = ticketNo();
     var rec = { ticket_no: t, reported_at: now(), created_at: now(), updated_at: now() };
     HEADERS.Requests.forEach(function(h){ if(p[h] !== undefined) rec[h] = p[h]; });
     rec.ticket_no = t;
+    // ชื่อ/แผนกผู้แจ้ง = ยึดจากชีตพนักงาน (กัน "ผู้ทดสอบ DEV" หรือชื่อที่ frontend ส่งมาผิด)
+    rec.requester_name = emp0.full_name || rec.requester_name || '';
+    if(emp0.department) rec.department = emp0.department;
     // แอดมินแจ้งเอง + ไม่ใช่งานอาคาร -> ส่งให้ผู้อนุมัติเลย (ไม่ต้องผ่านแอดมินตรวจซ้ำ)
-    var emp = getRows(SHEETS.EMP).filter(function(r){ return String(r.line_user_id) === String(p.requester_id); })[0];
-    var byAdmin = emp && /admin/i.test(String(emp.role||''));
+    var byAdmin = /admin/i.test(String(emp0.role||''));
     rec.status = (byAdmin && String(p.asset_category) !== 'building') ? 'pending_approval' : 'submitted';
     appendObj(SHEETS.REQ, rec);
     logStatus(t, '', rec.status, p.requester_id || '', byAdmin ? 'แอดมินแจ้งเอง → ส่งอนุมัติเลย' : '');
@@ -237,6 +256,11 @@ var API = {
     return getRows(SHEETS.REQ).filter(function(r){ return r.status === 'pending_approval'; }).map(strip);
   },
   requests: function(p){
+    var priv = isPrivLine(p.caller);
+    // ดูรายการของตัวเอง (requester=ตัวเอง) หรือดูใบเดียวตามเลขที่ = ได้
+    // ดูทั้งหมด/กรองสถานะ (คิวแอดมิน-อนุมัติ) = เฉพาะแอดมิน/ผู้อนุมัติ
+    var selfOnly = p.requester && String(p.requester) === String(p.caller);
+    denyIf(!priv && !selfOnly && !p.ticket_no, 'ดูรายการทั้งหมดได้เฉพาะแอดมิน/ผู้อนุมัติ');
     var rows = getRows(SHEETS.REQ);
     if(p.status){ var set = String(p.status).split(','); rows = rows.filter(function(r){ return set.indexOf(String(r.status)) >= 0; }); }
     if(p.requester){ rows = rows.filter(function(r){ return r.requester_id === p.requester; }); }
@@ -249,6 +273,7 @@ var API = {
     var arr = JSON.parse(r.getContentText() || '[]'); return Array.isArray(arr) ? arr : [];
   },
   assign: function(p){
+    denyIf(!isAdminLine(p.actor), 'เฉพาะแอดมิน');
     ensureReqCols();
     var cur = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === p.ticket_no; })[0];
     var base = { assignee_id: p.assignee_id||'', assignee_name: p.assignee_name||'', technician1: p.assignee_name||'', updated_at: now() };
@@ -276,6 +301,7 @@ var API = {
   },
   // แอดมินตรวจงานเสร็จแล้ว -> ส่งให้ผู้อนุมัติ (ขั้นตอนสุดท้ายของ flow อาคาร-สถานที่)
   send_approval: function(p){
+    denyIf(!isAdminLine(p.actor), 'เฉพาะแอดมิน');
     var cur = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === p.ticket_no; })[0];
     var prev = cur ? String(cur.status) : '';
     var isResend = (prev === 'rejected');
@@ -291,6 +317,7 @@ var API = {
   },
   // แอดมินตีกลับใบให้ผู้แจ้งแก้ไข (ก่อนส่งอนุมัติ) พร้อมเหตุผล
   return_ticket: function(p){
+    denyIf(!isAdminLine(p.actor), 'เฉพาะแอดมิน');
     var cur = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === p.ticket_no; })[0];
     patchByTicket(SHEETS.REQ, p.ticket_no, { status:'returned', rejected_reason: p.reason||'', updated_at: now() });
     var rev = revisionCount(p.ticket_no) + 1;   // ครั้งที่จะตีกลับนี้
@@ -316,12 +343,14 @@ var API = {
       .sort(function(a,b){ return String(a.created_at).localeCompare(String(b.created_at)); }).map(strip);
   },
   set_status: function(p){
+    denyIf(!isPrivLine(p.actor), 'เฉพาะแอดมิน/ผู้อนุมัติ');
     var cur = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === p.ticket_no; })[0];
     patchByTicket(SHEETS.REQ, p.ticket_no, { status: p.status, updated_at: now() });
     logStatus(p.ticket_no, cur ? cur.status : '', p.status, p.actor || '', p.note || '');
     return { ok:true };
   },
   approve: function(p){
+    denyIf(!isApproverLine(p.approver_line_id), 'เฉพาะผู้อนุมัติ');
     var cur = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === p.ticket_no; })[0];
     if(!cur) throw 'ticket not found';
     patchByTicket(SHEETS.REQ, p.ticket_no, { status:'approved', approved_at: now(), approver_id: p.approver_line_id||'', updated_at: now() });
@@ -347,7 +376,7 @@ var API = {
     try{ notifyAdminDecision(p.ticket_no, true, p.approver_line_id, '', pdfUrl); }catch(e){}   // ②
     return { ok:true, todo: task, pdf_url: pdfUrl };
   },
-  gen_pdf: function(p){ return { pdf_url: genPdf(p.ticket_no) }; },
+  gen_pdf: function(p){ denyIf(!isPrivLine(p.actor), 'เฉพาะแอดมิน/ผู้อนุมัติ'); return { pdf_url: genPdf(p.ticket_no) }; },
   // ดึงลายเซ็นของตัวเองมาแสดง (ส่งเป็น base64 — ไม่ต้องเปิดไฟล์เป็น public)
   signature: function(p){
     var e = getRows(SHEETS.EMP).filter(function(r){ return String(r.line_user_id) === String(p.line_user_id); })[0];
@@ -452,6 +481,7 @@ var API = {
     return { ok:true, synced:n };
   },
   reject: function(p){
+    denyIf(!isApproverLine(p.approver_line_id), 'เฉพาะผู้อนุมัติ');
     var cur = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === p.ticket_no; })[0];
     // เก็บว่าใครเป็นคนตีกลับด้วย ไม่งั้นหน้า "ประวัติของผู้อนุมัติ" จะหาใบนี้ไม่เจอ
     patchByTicket(SHEETS.REQ, p.ticket_no, { status:'rejected', rejected_reason: p.reason||'',
@@ -463,6 +493,9 @@ var API = {
   },
   // แก้ไข/เติมรายละเอียดใบแจ้งซ่อม (แอดมิน) — เติมข้อมูลก่อนออก PDF
   edit_request: function(p){
+    // แก้ได้: แอดมิน หรือ เจ้าของใบ (ตอนใบถูกตีกลับ)
+    var _own = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === p.ticket_no; })[0];
+    denyIf(!isAdminLine(p.actor) && !(_own && String(_own.requester_id)===String(p.actor)), 'ไม่มีสิทธิ์แก้ไขใบนี้');
     var allow=['symptom','cause','cause_type','fix_detail','prevention','amount','mileage','service_interval_km','vendor','machine_code','machine_name','department','requester_name','due_date','receipt_no','contamination','request_type','request_kind','repair_by','asset_category'];
     var patch={ updated_at: now() };
     allow.forEach(function(k){ if(p[k]!==undefined) patch[k]=p[k]; });
@@ -520,9 +553,9 @@ var API = {
   login_pin:    function(p){ return authLoginPin(p); },
   reg_lookup:   function(p){ return regLookup(p); },
   reg_submit:   function(p){ return regSubmit(p); },
-  pending_users:function(p){ return pendingUsers(p); },
-  approve_user: function(p){ return approveUser(p); },
-  reject_user:  function(p){ return rejectUser(p); }
+  pending_users:function(p){ denyIf(!isAdminLine(p.caller), 'เฉพาะแอดมิน'); return pendingUsers(p); },
+  approve_user: function(p){ denyIf(!isAdminLine(p.actor), 'เฉพาะแอดมิน'); return approveUser(p); },
+  reject_user:  function(p){ denyIf(!isAdminLine(p.actor), 'เฉพาะแอดมิน'); return rejectUser(p); }
 };
 function strip(o){ var c={}; for(var k in o){ if(k!=='_row') c[k]=o[k]; } return c; }
 
