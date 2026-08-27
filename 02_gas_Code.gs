@@ -238,6 +238,11 @@ var API = {
       .sort(function(a,b){ return String(b['วันที่ซ่อม']).localeCompare(String(a['วันที่ซ่อม'])); })
       .map(strip);
   },
+  // ประวัติซ่อมทุกคันในคราวเดียว (ใช้ทำรายงาน) — เฉพาะแอดมิน/ผู้อนุมัติ
+  history_all: function(p){
+    denyIf(!isPrivLine(p.caller), 'เฉพาะแอดมิน/ผู้บริหาร');
+    return getRows(SHEETS.HIST).map(strip);
+  },
   vehicle_summary: function(p){
     var rows = histOf(p.vehicle_key);
     var total = rows.reduce(function(s,r){ return s + (Number(r['จำนวนเงิน'])||0); }, 0);
