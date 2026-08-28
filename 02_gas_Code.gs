@@ -441,6 +441,18 @@ var API = {
     return { employees_total:emp.length, dev_employees:badEmp.length, list:badEmp,
              requests_total:req.length, dev_requests:badReq.length, req_list:badReq };
   },
+  // ล้างคำร้องขยะใน SiteTrack (เฉพาะใบว่างเปล่า หรือใบ [ทดสอบ] เท่านั้น — ใบจริงไม่โดนแน่นอน)
+  st_cleanup: function(){
+    var res = stCall('getRequests', {});
+    var list = res && res.ok ? (res.data || []) : [];
+    var junk = list.filter(function(r){
+      var empty = !String(r.title||'').trim() && !String(r.detail||'').trim() && !String(r.requester||'').trim();
+      return empty || /\[ทดสอบ\]/.test(String(r.title||''));
+    });
+    var out = [];
+    junk.forEach(function(r){ var d = stCall('deleteRequest', { id: r.id }); out.push({ id:r.id, title:r.title||'(ว่าง)', ok: !!(d&&d.ok) }); });
+    return { total:list.length, deleted:out };
+  },
   // ทดสอบเชื่อม SiteTrack (สร้างคำร้องทดสอบ 1 อัน — ลบได้ในหน้า SiteTrack)
   test_sitetrack: function(){
     var res = stCall('createRequest', { type:'ซ่อม', department:'HR', requester:'ทดสอบระบบ',
