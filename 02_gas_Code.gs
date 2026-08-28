@@ -304,17 +304,10 @@ var API = {
     if(cur && String(cur.asset_category) === 'building'){
       base.status = 'in_progress';
       patchByTicket(SHEETS.REQ, p.ticket_no, base);
-      logStatus(p.ticket_no, cur.status, 'in_progress', p.actor||'admin', 'มอบหมาย ' + (p.assignee_name||'') + ' → ส่งให้ผู้รับผิดชอบ');
-      var task = createTodoTask({
-        ticket_no: p.ticket_no,
-        title: 'ซ่อม ' + (cur.machine_name || cur.machine_code || '') + ' · ' + p.ticket_no,
-        description: cur.symptom || '',
-        priority: 'medium',
-        assignee_id: p.assignee_id || '',
-        creator_line_id: cur.requester_id || '',
-        due_date: cur.due_date || ''
-      });
-      return { ok:true, todo: task, flow:'building' };
+      logStatus(p.ticket_no, cur.status, 'in_progress', p.actor||'admin', 'มอบหมาย ' + (p.assignee_name||'') + ' → ส่งเข้า SiteTrack (คำร้อง)');
+      // งานอาคาร-สถานที่ -> สร้างคำร้องใน SiteTrack (เปลี่ยนจาก to-do เดิม)
+      var streq = createSiteTrackRequest(cur, p.assignee_name || '');
+      return { ok:true, sitetrack: streq, flow:'building' };
     }
     base.status = 'pending_approval';
     patchByTicket(SHEETS.REQ, p.ticket_no, base);
@@ -447,6 +440,12 @@ var API = {
     }).map(function(r){ return { ticket:r.ticket_no, req:String(r.requester_id||'').slice(0,12), name:r.requester_name }; });
     return { employees_total:emp.length, dev_employees:badEmp.length, list:badEmp,
              requests_total:req.length, dev_requests:badReq.length, req_list:badReq };
+  },
+  // ทดสอบเชื่อม SiteTrack (สร้างคำร้องทดสอบ 1 อัน — ลบได้ในหน้า SiteTrack)
+  test_sitetrack: function(){
+    var res = stCall('createRequest', { type:'ซ่อม', department:'HR', requester:'ทดสอบระบบ',
+      title:'[ทดสอบ] เชื่อม MySSB Connect', detail:'ทดสอบการเชื่อมระบบ ลบได้เลย', location:'ทดสอบ', priority:'ต่ำ' });
+    return res;
   },
   // ทดสอบส่งการ์ดคำขอลงทะเบียน (ไม่แก้ข้อมูล) — ดูว่า LINE ตอบอะไรกลับ
   test_regcard: function(p){
@@ -998,7 +997,63 @@ function createTodoTask(req){
 }
 
 // ตั้ง time-driven trigger เรียกทุก 5-10 นาที: task เสร็จใน to-do -> ปิดใบแจ้งซ่อม
+// ===== เชื่อม SiteTrack (คำร้อง ซ่อม/ช่วย) — งานอาคาร-สถานที่ส่งเข้าที่นี่ =====
+var SITETRACK_URL_DEFAULT = 'https://script.google.com/macros/s/AKfycbz_Zf3K3YxBoj4DBY8LgzLALkSFgxb98mIxcFHEEV0wVGh4-ZJfyMMefaeiq_1Ey5Cf7A/exec';
+function stUrl(){ return PropertiesService.getScriptProperties().getProperty('SITETRACK_URL') || SITETRACK_URL_DEFAULT; }
+function stCall(action, payload){
+  payload = payload || {}; payload.action = action;
+  var r = UrlFetchApp.fetch(stUrl(), { method:'post', contentType:'application/json',
+    payload: JSON.stringify(payload), muteHttpExceptions:true, followRedirects:true });
+  try{ return JSON.parse(r.getContentText()); }
+  catch(e){ return { ok:false, error:'sitetrack non-json', raw:String(r.getContentText()).slice(0,150) }; }
+}
+/** สร้างคำร้องใน SiteTrack จากใบแจ้งซ่อมอาคาร แล้วเก็บ id ผูกไว้กับใบ */
+function createSiteTrackRequest(cur, assigneeName){
+  var res = stCall('createRequest', {
+    type: 'ซ่อม',
+    department: cur.department || 'HR',
+    requester: cur.requester_name || '',
+    title: 'ซ่อม ' + (cur.machine_name || '') + (cur.machine_code ? (' ห้อง ' + cur.machine_code) : '') + ' · ' + cur.ticket_no,
+    detail: (cur.symptom || '') + '\n(จาก MySSB Connect · ใบ ' + cur.ticket_no + ')',
+    location: [cur.machine_name, cur.machine_code ? ('ห้อง ' + cur.machine_code) : ''].filter(Boolean).join(' · '),
+    priority: 'กลาง',
+    assignee: assigneeName || ''
+  });
+  var req = res && res.ok && res.data && res.data.request ? res.data.request : null;
+  if(req && req.id){
+    ensureCol_(SHEETS.REQ, 'sitetrack_id');
+    patchByTicket(SHEETS.REQ, cur.ticket_no, { sitetrack_id: req.id });
+  }
+  return req || { error: (res && res.error) || 'สร้างคำร้องไม่สำเร็จ' };
+}
+// เพิ่มคอลัมน์ถ้ายังไม่มี (ใช้ทั่วไป)
+function ensureCol_(sheetName, col){
+  var s = sh(sheetName);
+  var head = s.getRange(1,1,1,Math.max(1,s.getLastColumn())).getValues()[0];
+  if(head.indexOf(col) < 0) s.getRange(1, s.getLastColumn()+1).setValue(col);
+}
+/** SiteTrack กดเสร็จ/ปิด -> ใบ MySSB เป็น done + แจ้งแอดมินตรวจ (เรียกจาก trigger เดียวกับ pollTodoDone) */
+function pollSiteTrackDone(){
+  var open = getRows(SHEETS.REQ).filter(function(r){
+    return r.sitetrack_id && String(r.status) === 'in_progress';
+  });
+  if(!open.length) return;
+  var res = stCall('getRequests', {});
+  var list = res && res.ok ? (res.data || []) : [];
+  if(!list.length) return;
+  var byId = {}; list.forEach(function(x){ byId[String(x.id)] = x; });
+  open.forEach(function(r){
+    var st = byId[String(r.sitetrack_id)];
+    if(st && (String(st.status) === 'เสร็จ' || String(st.status) === 'ปิด')){
+      patchByTicket(SHEETS.REQ, r.ticket_no, { status:'done', repair_finish: now(), updated_at: now() });
+      logStatus(r.ticket_no, 'in_progress', 'done', 'sitetrack-sync', 'งานเสร็จจาก SiteTrack');
+      notifyAdmins('🔧 งานเสร็จแล้ว (SiteTrack) รอแอดมินตรวจ: ' + r.ticket_no);
+    }
+  });
+}
+
 function pollTodoDone(){
+  try{ pollSiteTrackDone(); }catch(e){}   // เกาะ trigger เดิม ไม่ต้องตั้งใหม่
   var c = sbProps();
   if(!c.url || !c.key) return;
   var P = PropertiesService.getScriptProperties();
