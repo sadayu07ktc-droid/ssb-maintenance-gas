@@ -443,6 +443,12 @@ var API = {
     return { employees_total:emp.length, dev_employees:badEmp.length, list:badEmp,
              requests_total:req.length, dev_requests:badReq.length, req_list:badReq };
   },
+  // สั่ง sync สถานะจาก SiteTrack เดี๋ยวนี้ (ไม่ต้องรอ trigger)
+  st_sync: function(){
+    pollSiteTrackDone();
+    return getRows(SHEETS.REQ).filter(function(r){ return r.sitetrack_id; })
+      .map(function(r){ return { ticket:r.ticket_no, status:r.status, sitetrack:r.sitetrack_status||'' }; });
+  },
   // ล้างคำร้องขยะใน SiteTrack (เฉพาะใบว่างเปล่า หรือใบ [ทดสอบ] เท่านั้น — ใบจริงไม่โดนแน่นอน)
   st_cleanup: function(){
     var res = stCall('getRequests', {});
