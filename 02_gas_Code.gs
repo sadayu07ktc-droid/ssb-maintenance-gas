@@ -307,6 +307,8 @@ var API = {
       logStatus(p.ticket_no, cur.status, 'in_progress', p.actor||'admin', 'มอบหมาย ' + (p.assignee_name||'') + ' → ส่งเข้า SiteTrack (คำร้อง)');
       // งานอาคาร-สถานที่ -> สร้างคำร้องใน SiteTrack (เปลี่ยนจาก to-do เดิม)
       var streq = createSiteTrackRequest(cur, p.assignee_name || '');
+      ensureCol_(SHEETS.REQ, 'sitetrack_status');
+      patchByTicket(SHEETS.REQ, p.ticket_no, { sitetrack_status:'รอรับ' });   // เริ่มที่ "รอวิศวะรับงาน" ไม่ใช่กำลังทำ
       return { ok:true, sitetrack: streq, flow:'building' };
     }
     base.status = 'pending_approval';
@@ -1044,7 +1046,9 @@ function ensureCol_(sheetName, col){
   var head = s.getRange(1,1,1,Math.max(1,s.getLastColumn())).getValues()[0];
   if(head.indexOf(col) < 0) s.getRange(1, s.getLastColumn()+1).setValue(col);
 }
-/** SiteTrack กดเสร็จ/ปิด -> ใบ MySSB เป็น done + แจ้งแอดมินตรวจ (เรียกจาก trigger เดียวกับ pollTodoDone) */
+/** sync สถานะจาก SiteTrack ทุกขั้น (รอรับ/รับแล้ว/กำลังทำ/เสร็จ/ปิด) -> ใบ MySSB ยึดตามจริง */
+var ST_NOTE = { 'รอรับ':'ส่งเข้า SiteTrack — รอวิศวะรับงาน', 'รับแล้ว':'วิศวะรับงานแล้ว (SiteTrack)',
+                'กำลังทำ':'วิศวะกำลังทำงาน (SiteTrack)', 'เสร็จ':'งานเสร็จจาก SiteTrack', 'ปิด':'งานเสร็จจาก SiteTrack (ปิดงาน)' };
 function pollSiteTrackDone(){
   var open = getRows(SHEETS.REQ).filter(function(r){
     return r.sitetrack_id && String(r.status) === 'in_progress';
@@ -1053,12 +1057,23 @@ function pollSiteTrackDone(){
   var res = stCall('getRequests', {});
   var list = res && res.ok ? (res.data || []) : [];
   if(!list.length) return;
+  ensureCol_(SHEETS.REQ, 'sitetrack_status');
   var byId = {}; list.forEach(function(x){ byId[String(x.id)] = x; });
   open.forEach(function(r){
     var st = byId[String(r.sitetrack_id)];
-    if(st && (String(st.status) === 'เสร็จ' || String(st.status) === 'ปิด')){
+    if(!st) return;
+    var s = String(st.status || '');
+    // สถานะกลางทาง (รอรับ/รับแล้ว/กำลังทำ) -> อัปเดตป้ายย่อย + บันทึกไทม์ไลน์เมื่อเปลี่ยน
+    if(s !== String(r.sitetrack_status || '')){
+      var patch = { sitetrack_status: s, updated_at: now() };
+      // วิศวะที่รับงานใน SiteTrack = ผู้รับผิดชอบตัวจริง (อาจต่างจากที่แอดมินเลือกไว้)
+      if(st.assignee && st.assignee !== r.assignee_name) patch.assignee_name = st.assignee;
+      patchByTicket(SHEETS.REQ, r.ticket_no, patch);
+      logStatus(r.ticket_no, 'in_progress', 'in_progress', 'sitetrack-sync', ST_NOTE[s] || ('SiteTrack: ' + s));
+    }
+    if(s === 'เสร็จ' || s === 'ปิด'){
       patchByTicket(SHEETS.REQ, r.ticket_no, { status:'done', repair_finish: now(), updated_at: now() });
-      logStatus(r.ticket_no, 'in_progress', 'done', 'sitetrack-sync', 'งานเสร็จจาก SiteTrack');
+      logStatus(r.ticket_no, 'in_progress', 'done', 'sitetrack-sync', ST_NOTE[s]);
       notifyAdmins('🔧 งานเสร็จแล้ว (SiteTrack) รอแอดมินตรวจ: ' + r.ticket_no);
     }
   });
