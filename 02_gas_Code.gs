@@ -1001,9 +1001,9 @@ function createTodoTask(req){
 var SITETRACK_URL_DEFAULT = 'https://script.google.com/macros/s/AKfycbz_Zf3K3YxBoj4DBY8LgzLALkSFgxb98mIxcFHEEV0wVGh4-ZJfyMMefaeiq_1Ey5Cf7A/exec';
 function stUrl(){ return PropertiesService.getScriptProperties().getProperty('SITETRACK_URL') || SITETRACK_URL_DEFAULT; }
 function stCall(action, payload){
-  payload = payload || {}; payload.action = action;
+  // SiteTrack ใช้โครง {action, payload:{...}} แบบซ้อน (ไม่ใช่แบน)
   var r = UrlFetchApp.fetch(stUrl(), { method:'post', contentType:'application/json',
-    payload: JSON.stringify(payload), muteHttpExceptions:true, followRedirects:true });
+    payload: JSON.stringify({ action:action, payload:(payload||{}) }), muteHttpExceptions:true, followRedirects:true });
   try{ return JSON.parse(r.getContentText()); }
   catch(e){ return { ok:false, error:'sitetrack non-json', raw:String(r.getContentText()).slice(0,150) }; }
 }
