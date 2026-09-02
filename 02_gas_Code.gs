@@ -344,6 +344,17 @@ var API = {
     try{ notifyReturnCard(p.ticket_no, p.reason, rev); }catch(e){}
     return { ok:true, revision: rev };
   },
+  // แอดมินยกเลิกใบ (พร้อมเหตุผล) — ตั้งใจ "ไม่แจ้งผู้แจ้ง" (ยกเลิกเงียบ เช่น ใบซ้ำ/ใบทดสอบ)
+  cancel_ticket: function(p){
+    denyIf(!isAdminLine(p.actor), 'เฉพาะแอดมิน');
+    var cur = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === p.ticket_no; })[0];
+    denyIf(!cur, 'ไม่พบใบ ' + p.ticket_no);
+    patchByTicket(SHEETS.REQ, p.ticket_no, { status:'cancelled', rejected_reason: p.reason||'', updated_at: now() });
+    logStatus(p.ticket_no, cur.status, 'cancelled', p.actor||'admin', 'แอดมินยกเลิกใบ: ' + (p.reason||''));
+    // ถ้าใบนี้ถูกส่งเข้า SiteTrack แล้ว -> ปิดคำร้องฝั่งนั้นด้วย กันวิศวะทำงานเก้อ
+    if(cur.sitetrack_id){ try{ stCall('updateRequest', { id: cur.sitetrack_id, status:'ปิด' }); }catch(e){} }
+    return { ok:true };
+  },
   // ผู้แจ้งแก้ไขแล้วส่งกลับ -> กลับไปสถานะรอแอดมินตรวจ
   resubmit_ticket: function(p){
     var cur = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === p.ticket_no; })[0];
@@ -973,7 +984,7 @@ function handleLineEvents(events){
   });
 }
 var STATUS_TH = { submitted:'รอแอดมินตรวจ', pending_approval:'รออนุมัติ', approved:'อนุมัติแล้ว',
-  in_progress:'กำลังทำ', done:'เสร็จ', sent_accounting:'ส่งบัญชี', closed:'ปิดงาน', rejected:'ไม่อนุมัติ' };
+  in_progress:'กำลังทำ', done:'เสร็จ', sent_accounting:'ส่งบัญชี', closed:'ปิดงาน', rejected:'ไม่อนุมัติ', cancelled:'ยกเลิก' };
 /** แจ้งผู้อนุมัติด้วยการ์ด (ถ้าสร้างการ์ดไม่ได้ ตกกลับไปเป็นข้อความธรรมดา) */
 function notifyApprovalCard(ticketNo, resend){
   var r = getRows(SHEETS.REQ).filter(function(x){ return x.ticket_no === ticketNo; })[0];
