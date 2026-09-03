@@ -440,6 +440,22 @@ var API = {
     return { ok:true, folder: folder.getName(), file: file.getName() };
   },
   // ตรวจบัญชี/ใบที่ติด dev-user หรือชื่อทดสอบ
+  // เพิ่มคอลัมน์ข้อมูลพนักงานสำหรับการ์ดหน้าแรก (เรียกซ้ำได้ ไม่ทำอะไรถ้ามีแล้ว)
+  add_emp_cols: function(){
+    var cols = ['nickname','position','company','start_date','photo_url'];
+    var added = [];
+    cols.forEach(function(c){
+      var s = sh(SHEETS.EMP);
+      var head = s.getRange(1,1,1,Math.max(1,s.getLastColumn())).getValues()[0];
+      if(head.indexOf(c) < 0){ ensureCol_(SHEETS.EMP, c); added.push(c); }
+    });
+    // start_date เก็บเป็นข้อความ กันชีตแปลงเป็นวันที่แล้วเพี้ยน
+    var s2 = sh(SHEETS.EMP);
+    var head2 = s2.getRange(1,1,1,s2.getLastColumn()).getValues()[0];
+    var di = head2.indexOf('start_date');
+    if(di >= 0 && s2.getLastRow() > 1) s2.getRange(2, di+1, s2.getLastRow()-1, 1).setNumberFormat('@');
+    return { added: added, all_headers: head2 };
+  },
   dev_audit: function(){
     var emp = getRows(SHEETS.EMP);
     var badEmp = emp.filter(function(r){
