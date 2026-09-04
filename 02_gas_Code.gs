@@ -488,6 +488,14 @@ var API = {
     junk.forEach(function(r){ var d = stCall('deleteRequest', { id: r.id }); out.push({ id:r.id, title:r.title||'(ว่าง)', ok: !!(d&&d.ok) }); });
     return { total:list.length, deleted:out };
   },
+  // ทดสอบการ์ดเมนู OA: ?action=test_oamenu&key=แจ้งซ่อม&to=<lineUserId>
+  test_oamenu: function(p){
+    var k = p.key || 'แจ้งซ่อม';
+    var m = OA_MENUS[k];
+    if(!m) return { ok:false, error:'ไม่มีเมนู ' + k, keys: Object.keys(OA_MENUS) };
+    if(p.to) return pushFlex(p.to, 'เมนู ' + m.title, oaMenuBubble(m));
+    return { preview: oaMenuBubble(m) };
+  },
   // ทดสอบเชื่อม SiteTrack (สร้างคำร้องทดสอบ 1 อัน — ลบได้ในหน้า SiteTrack)
   test_sitetrack: function(){
     var res = stCall('createRequest', { type:'ซ่อม', department:'HR', requester:'ทดสอบระบบ',
@@ -942,8 +950,152 @@ function lineReply(token, text){
     });
   }catch(e){}
 }
+// ============================================================
+//  Rich Menu 6 ปุ่ม -> ตอบ Flex การ์ดเมนูย่อย
+//  ผู้ใช้แตะปุ่ม = ส่งข้อความ "เมนู:xxx" เข้ามา แล้วบอทตอบการ์ด
+// ============================================================
+var OA_MENUS = {
+  'แจ้งซ่อม': {
+    title: 'แจ้งซ่อม',
+    sub: 'เลือกประเภทงานที่ต้องการแจ้ง',
+    color: '#ea580c',
+    items: [
+      { t:'แจ้งซ่อมรถ',    d:'ทะเบียน · เลขไมล์', q:'car' },
+      { t:'แจ้งซ่อมอาคาร', d:'สถานที่ · ห้อง',    q:'building' },
+      { t:'รายการของฉัน',  d:'ติดตามสถานะใบ',    q:'mine' },
+      { t:'รถของฉัน',      d:'ประวัติซ่อมรถ',    q:'cars' }
+    ]
+  },
+  'งานของฉัน': {
+    title: 'งานของฉัน',
+    sub: 'ใบแจ้งซ่อมและสถานะล่าสุด',
+    color: '#2563eb',
+    items: [
+      { t:'ใบทั้งหมด',    d:'ทุกใบที่เคยแจ้ง',   q:'mine' },
+      { t:'รออนุมัติ',     d:'ส่งไปแล้ว รอผล',    q:'mine&f=wait' },
+      { t:'ถูกตีกลับ',     d:'ต้องแก้ไขและส่งใหม่', q:'mine&f=rej' },
+      { t:'อนุมัติแล้ว',   d:'ดูใบงาน PDF',       q:'mine&f=ok' }
+    ]
+  },
+  'อนุมัติ': {
+    title: 'การอนุมัติ',
+    sub: 'สำหรับแอดมินและผู้บริหาร',
+    color: '#059669',
+    items: [
+      { t:'รออนุมัติ',      d:'ใบที่รอผู้บริหารอนุมัติ', q:'approve' },
+      { t:'ตรวจใบแจ้งซ่อม', d:'แอดมินตรวจก่อนส่ง',    q:'admin' },
+      { t:'รายงานค่าซ่อม',  d:'สรุป + ออก Excel',      q:'report' },
+      { t:'ประวัติซ่อมรถ',  d:'ทุกคันในบริษัท',        q:'hist' }
+    ]
+  },
+  'เครื่องมือ': {
+    title: 'AI Toolkit',
+    sub: 'คลังเครื่องมือที่สร้างด้วย AI',
+    color: '#7c3aed',
+    items: [
+      { t:'PW Audit',    d:'ตรวจปิดใบสั่งผลิต', url:'https://pw-audit.pages.dev/' },
+      { t:'To-do List',  d:'งาน/โปรเจกต์ทีม',   url:'https://main.job-todo.pages.dev/' },
+      { t:'SiteTrack',   d:'งานวิศวะ/คำร้อง',   url:'https://sitetrack-zgn.pages.dev/' },
+      { t:'Locker',      d:'ล็อกเกอร์พนักงาน',  url:'https://hr-lockers.sadayu07-ktc.workers.dev' }
+    ]
+  },
+  'แจ้งเตือน': {
+    title: 'แจ้งเตือนเอกสาร',
+    sub: 'Doc Control — เอกสารหมดอายุ',
+    color: '#e11d48',
+    items: [
+      { t:'Dashboard', d:'ภาพรวมเอกสารทั้งหมด', url:'https://sadayu07ktc-droid.github.io/Doc_Control_Dashboard/' },
+      { t:'ตั้งค่าแจ้งเตือน', d:'กำหนดวันแจ้งล่วงหน้า', url:'https://sadayu07ktc-droid.github.io/Doc_Control_Notify/' },
+      { t:'PostHR', d:'ติดตามการส่งเอกสาร', url:'https://portal.suksomboon.group/posthr' }
+    ]
+  },
+  'ช่วยเหลือ': {
+    title: 'ช่วยเหลือ',
+    sub: 'วิธีใช้งานและติดต่อเจ้าหน้าที่',
+    color: '#475569',
+    items: [
+      { t:'เปิดแอป MySSB', d:'เข้าหน้าหลักทั้งหมด', q:'' },
+      { t:'วิธีแจ้งซ่อมรถ', d:'ขั้นตอนทีละข้อ',     say:'แจ้งซ่อมรถยังไง' },
+      { t:'ขั้นตอนอนุมัติ',  d:'ใบวิ่งไปทางไหน',     say:'ใครอนุมัติ' },
+      { t:'ติดต่อ HR',      d:'สอบถามเจ้าหน้าที่',   say:'ติดต่อ HR' }
+    ]
+  }
+};
+// แถวหนึ่งรายการในการ์ด
+function oaRow(it, color){
+  var act;
+  if(it.url)      act = { type:'uri', label:'เปิด', uri: it.url };
+  else if(it.say) act = { type:'message', label:'ถาม', text: it.say };
+  else            act = { type:'uri', label:'เปิด', uri: liffUrl(it.q ? ('t=' + it.q) : '') };
+  return {
+    type:'box', layout:'horizontal', spacing:'md', paddingAll:'12px', cornerRadius:'12px',
+    backgroundColor:'#F8FAFC', margin:'sm', action: act,
+    contents:[
+      { type:'box', layout:'vertical', width:'4px', cornerRadius:'2px', backgroundColor:color, contents:[{type:'filler'}] },
+      { type:'box', layout:'vertical', flex:1, spacing:'none', contents:[
+        { type:'text', text: it.t, size:'sm', weight:'bold', color:'#0F172A' },
+        { type:'text', text: it.d, size:'xxs', color:'#94A3B8', margin:'xs' }
+      ]},
+      { type:'text', text:'›', size:'lg', color:'#CBD5E1', flex:0, gravity:'center' }
+    ]
+  };
+}
+// การ์ดเมนู
+function oaMenuBubble(m){
+  return {
+    type:'bubble', size:'mega',
+    header:{
+      type:'box', layout:'vertical', paddingAll:'18px', backgroundColor: m.color, spacing:'none',
+      contents:[
+        { type:'text', text:'MySSB CONNECT', size:'xxs', color:'#FFFFFF', weight:'bold' },
+        { type:'text', text:m.title, size:'xl', color:'#FFFFFF', weight:'bold', margin:'sm' },
+        { type:'text', text:m.sub, size:'xs', color:'#FFFFFF', margin:'xs', wrap:true }
+      ]
+    },
+    body:{
+      type:'box', layout:'vertical', paddingAll:'12px', spacing:'none',
+      contents: m.items.map(function(it){ return oaRow(it, m.color); })
+    },
+    footer:{
+      type:'box', layout:'vertical', paddingAll:'12px',
+      contents:[{
+        type:'button', style:'primary', height:'sm', color:'#1E293B',
+        action:{ type:'uri', label:'เปิดแอป MySSB Connect', uri: liffUrl('') }
+      }]
+    }
+  };
+}
+// ตอบข้อความจาก Rich Menu / คำสั่งสั้นๆ
+function handleMenuText(replyToken, text, uid){
+  var t = String(text || '').replace(/\s+/g,'');
+  var key = null;
+  Object.keys(OA_MENUS).forEach(function(k){
+    if(!key && (t === 'เมนู:' + k.replace(/\s+/g,'') || t === k.replace(/\s+/g,''))) key = k;
+  });
+  if(key){ replyFlex(replyToken, 'เมนู ' + OA_MENUS[key].title, oaMenuBubble(OA_MENUS[key])); return; }
+  // ไม่ตรงเมนู -> เงียบไว้ (กันบอทตอบรบกวนตอนคนคุยกันปกติ)
+}
+// ตอบกลับเป็น Flex
+function replyFlex(token, alt, bubble){
+  var tk = PropertiesService.getScriptProperties().getProperty('LINE_PUSH_TOKEN');
+  if(!tk || !token) return;
+  try{
+    var r = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/reply', {
+      method:'post', contentType:'application/json',
+      headers:{ Authorization:'Bearer ' + tk },
+      payload: JSON.stringify({ replyToken: token, messages:[{ type:'flex', altText: String(alt).slice(0,395), contents: bubble }] }),
+      muteHttpExceptions:true
+    });
+    return { status: r.getResponseCode(), body: String(r.getContentText()).slice(0,300) };
+  }catch(e){ return { error:String(e) }; }
+}
 function handleLineEvents(events){
   (events || []).forEach(function(ev){
+    // ---- ข้อความจาก Rich Menu ("เมนู:xxx") -> ตอบการ์ดเมนูย่อย ----
+    if(ev && ev.type === 'message' && ev.message && ev.message.type === 'text'){
+      handleMenuText(ev.replyToken, String(ev.message.text || '').trim(), ev.source && ev.source.userId);
+      return;
+    }
     if(!ev || ev.type !== 'postback') return;
     var d = parseQS(ev.postback && ev.postback.data);
     if(!d.act || !d.t) return;
