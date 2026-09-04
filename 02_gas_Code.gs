@@ -1010,13 +1010,14 @@ var OA_MENUS = {
   },
   'ESS': {
     title: 'ESS · บริการพนักงาน',
-    sub: 'ข้อมูลส่วนตัวและงานเอกสาร',
-    color: '#e11d48',
+    sub: 'กำลังพัฒนา — เปิดให้บริการเร็วๆ นี้',
+    color: '#64748B',
+    soonNote: 'เมนูนี้กำลังพัฒนาอยู่ครับ · เมื่อเปิดใช้งานจะแจ้งให้ทราบทางไลน์นี้',
     items: [
-      { t:'โปรไฟล์ของฉัน', d:'ข้อมูลพนักงาน · ลายเซ็น', q:'profile' },
-      { t:'แจ้งเตือนเอกสารหมดอายุ', d:'Doc Control Dashboard', url:'https://sadayu07ktc-droid.github.io/Doc_Control_Dashboard/' },
-      { t:'ตั้งค่าแจ้งเตือน', d:'กำหนดวันแจ้งล่วงหน้า', url:'https://sadayu07ktc-droid.github.io/Doc_Control_Notify/' },
-      { t:'PostHR', d:'ติดตามการส่งเอกสาร', url:'https://portal.suksomboon.group/posthr' }
+      { t:'สลิปเงินเดือน',            d:'ดู/ดาวน์โหลดย้อนหลัง',        soon:true },
+      { t:'หนังสือรับรองหัก ณ ที่จ่าย', d:'50 ทวิ · ใช้ยื่นภาษี',        soon:true },
+      { t:'ใบลา · ประวัติการลา',      d:'ยื่นลา · ดูวันลาคงเหลือ',      soon:true },
+      { t:'ประวัติลงเวลา · OT',       d:'เข้า-ออกงาน · ชั่วโมงล่วงเวลา', soon:true }
     ]
   },
   'ช่วยเหลือ': {
@@ -1033,6 +1034,15 @@ var OA_MENUS = {
 };
 // แถวหนึ่งรายการในการ์ด
 function oaRow(it, color){
+  if(it.soon){
+    return { type:'box', layout:'horizontal', spacing:'md', paddingAll:'12px', cornerRadius:'12px',
+      backgroundColor:'#F1F5F9', margin:'sm', contents:[
+      { type:'box', layout:'vertical', width:'4px', cornerRadius:'2px', backgroundColor:'#CBD5E1', contents:[{type:'filler'}] },
+      { type:'box', layout:'vertical', flex:1, contents:[
+        { type:'text', text: it.t, size:'sm', weight:'bold', color:'#64748B' },
+        { type:'text', text: it.d, size:'xxs', color:'#B6BFCC', margin:'xs' } ]},
+      { type:'text', text:'เร็วๆ นี้', size:'xxs', color:'#94A3B8', flex:0, gravity:'center' } ] };
+  }
   var act;
   if(it.url)      act = { type:'uri', label:'เปิด', uri: it.url };
   else if(it.say) act = { type:'message', label:'ถาม', text: it.say };
@@ -1076,6 +1086,7 @@ function oaMenuBubble(m, role){
     body:{
       type:'box', layout:'vertical', paddingAll:'12px', spacing:'none',
       contents: items.map(function(it){ return oaRow(it, m.color); })
+        .concat(m.soonNote ? [{ type:'text', text:m.soonNote, size:'xxs', color:'#94A3B8', wrap:true, margin:'lg', align:'center' }] : [])
     },
     footer:{
       type:'box', layout:'vertical', paddingAll:'12px',
@@ -1161,7 +1172,8 @@ function rmAreas(){
     lk(833,  420,  834,  633, 'mine'),      // งานของฉัน
     lk(1667, 420,  833,  633, 'approve'),   // อนุมัติ
     lk(0,    1053, 833,  633, 'toolkit'),   // เครื่องมือ (AI Toolkit)
-    lk(833,  1053, 834,  633, 'profile'),   // ESS -> โปรไฟล์
+    { bounds:{ x:833, y:1053, width:834, height:633 },
+      action:{ type:'message', text:'เมนู:ESS' } },   // ESS -> บอทตอบว่ายังไม่เปิด
     lk(1667, 1053, 833,  633, 'help')       // ช่วยเหลือ -> เปิดผู้ช่วยแชท
   ];
 }
