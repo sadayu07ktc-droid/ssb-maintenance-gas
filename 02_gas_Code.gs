@@ -501,8 +501,9 @@ var API = {
     var k = p.key || 'แจ้งซ่อม';
     var m = OA_MENUS[k];
     if(!m) return { ok:false, error:'ไม่มีเมนู ' + k, keys: Object.keys(OA_MENUS) };
-    if(p.to) return pushFlex(p.to, 'เมนู ' + m.title, oaMenuBubble(m));
-    return { preview: oaMenuBubble(m) };
+    var role = p.role || '';
+    if(p.to) return pushFlex(p.to, 'เมนู ' + m.title, oaMenuBubble(m, role));
+    return { preview: oaMenuBubble(m, role) };
   },
   // ทดสอบเชื่อม SiteTrack (สร้างคำร้องทดสอบ 1 อัน — ลบได้ในหน้า SiteTrack)
   test_sitetrack: function(){
@@ -990,10 +991,10 @@ var OA_MENUS = {
     sub: 'สำหรับแอดมินและผู้บริหาร',
     color: '#059669',
     items: [
-      { t:'รออนุมัติ',      d:'ใบที่รอผู้บริหารอนุมัติ', q:'approve' },
-      { t:'ตรวจใบแจ้งซ่อม', d:'แอดมินตรวจก่อนส่ง',    q:'admin' },
-      { t:'รายงานค่าซ่อม',  d:'สรุป + ออก Excel',      q:'report' },
-      { t:'ประวัติซ่อมรถ',  d:'ทุกคันในบริษัท',        q:'hist' }
+      { t:'รออนุมัติ',      d:'ใบที่รอผู้บริหารอนุมัติ', q:'approve', only:'approver' },
+      { t:'ตรวจใบแจ้งซ่อม', d:'แอดมินตรวจก่อนส่ง',    q:'admin', only:'admin' },
+      { t:'รายงานค่าซ่อม',  d:'สรุป + ออก Excel',      q:'report', only:'priv' },
+      { t:'ประวัติซ่อมรถ',  d:'ทุกคันในบริษัท',        q:'hist', only:'priv' }
     ]
   },
   'เครื่องมือ': {
@@ -1004,7 +1005,7 @@ var OA_MENUS = {
       { t:'PW Audit',    d:'ตรวจปิดใบสั่งผลิต', url:'https://pw-audit.pages.dev/' },
       { t:'To-do List',  d:'งาน/โปรเจกต์ทีม',   url:'https://main.job-todo.pages.dev/' },
       { t:'SiteTrack',   d:'งานวิศวะ/คำร้อง',   url:'https://sitetrack-zgn.pages.dev/' },
-      { t:'Locker',      d:'ล็อกเกอร์พนักงาน',  url:'https://hr-lockers.sadayu07-ktc.workers.dev' }
+      { t:'Locker',      d:'ล็อกเกอร์พนักงาน',  url:'https://hr-lockers.sadayu07-ktc.workers.dev', only:'admin' }
     ]
   },
   'ESS': {
@@ -1049,8 +1050,19 @@ function oaRow(it, color){
     ]
   };
 }
+// เห็นรายการนี้ได้ไหม (only: admin | approver | priv | ไม่ระบุ = ทุกคน)
+function oaCanSee(it, role){
+  if(!it.only) return true;
+  var isA = /admin/i.test(role), isP = /approv|exec|manager|บริหาร/i.test(role);
+  if(it.only === 'admin') return isA;
+  if(it.only === 'approver') return isP || isA;
+  if(it.only === 'priv') return isA || isP;
+  return true;
+}
 // การ์ดเมนู
-function oaMenuBubble(m){
+function oaMenuBubble(m, role){
+  var items = (m.items || []).filter(function(it){ return oaCanSee(it, role || ''); });
+  if(!items.length) return oaDenyBubble(m);
   return {
     type:'bubble', size:'mega',
     header:{
@@ -1063,7 +1075,7 @@ function oaMenuBubble(m){
     },
     body:{
       type:'box', layout:'vertical', paddingAll:'12px', spacing:'none',
-      contents: m.items.map(function(it){ return oaRow(it, m.color); })
+      contents: items.map(function(it){ return oaRow(it, m.color); })
     },
     footer:{
       type:'box', layout:'vertical', paddingAll:'12px',
@@ -1073,6 +1085,20 @@ function oaMenuBubble(m){
       }]
     }
   };
+}
+// การ์ดเมื่อไม่มีสิทธิ์ในหมวดนั้น
+function oaDenyBubble(m){
+  return { type:'bubble', size:'mega',
+    header:{ type:'box', layout:'vertical', paddingAll:'18px', backgroundColor:'#64748B', contents:[
+      { type:'text', text:'MySSB CONNECT', size:'xxs', color:'#FFFFFF', weight:'bold' },
+      { type:'text', text:m.title, size:'xl', color:'#FFFFFF', weight:'bold', margin:'sm' },
+      { type:'text', text:'เมนูนี้สำหรับแอดมิน / ผู้บริหาร', size:'xs', color:'#FFFFFF', margin:'xs', wrap:true } ] },
+    body:{ type:'box', layout:'vertical', paddingAll:'16px', contents:[
+      { type:'text', text:'บัญชีของคุณยังไม่มีสิทธิ์ในหมวดนี้ครับ', size:'sm', color:'#0F172A', wrap:true },
+      { type:'text', text:'ถ้าคิดว่าไม่ถูกต้อง ติดต่อฝ่าย HR เพื่อปรับสิทธิ์ได้เลย', size:'xs', color:'#94A3B8', wrap:true, margin:'sm' } ] },
+    footer:{ type:'box', layout:'vertical', paddingAll:'12px', contents:[
+      { type:'button', style:'primary', height:'sm', color:'#1E293B',
+        action:{ type:'message', label:'ดูเมนูงานของฉันแทน', text:'เมนู:งานของฉัน' } } ] } };
 }
 // ตอบข้อความจาก Rich Menu / คำสั่งสั้นๆ
 function handleMenuText(replyToken, text, uid){
@@ -1086,7 +1112,12 @@ function handleMenuText(replyToken, text, uid){
   Object.keys(OA_MENUS).forEach(function(k){
     if(!key && (t === 'เมนู:' + k.replace(/\s+/g,'') || t === k.replace(/\s+/g,''))) key = k;
   });
-  if(key){ replyFlex(replyToken, 'เมนู ' + OA_MENUS[key].title, oaMenuBubble(OA_MENUS[key])); return; }
+  if(key){
+    var role = '';
+    try{ role = roleByLine(uid); }catch(e){}
+    replyFlex(replyToken, 'เมนู ' + OA_MENUS[key].title, oaMenuBubble(OA_MENUS[key], role));
+    return;
+  }
   // ไม่ตรงเมนู -> เงียบไว้ (กันบอทตอบรบกวนตอนคนคุยกันปกติ)
 }
 // ตอบกลับเป็น Flex
