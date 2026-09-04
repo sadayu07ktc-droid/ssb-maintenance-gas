@@ -488,6 +488,14 @@ var API = {
     junk.forEach(function(r){ var d = stCall('deleteRequest', { id: r.id }); out.push({ id:r.id, title:r.title||'(ว่าง)', ok: !!(d&&d.ok) }); });
     return { total:list.length, deleted:out };
   },
+  // ---- ติดตั้ง Rich Menu อัตโนมัติ (พิกัดเป๊ะ 7 พื้นที่) ----
+  // ?action=setup_richmenu&img=<URL รูป 2500x1686>
+  setup_richmenu: function(p){
+    var img = p.img || 'https://myssb-connect.pages.dev/richmenu.png';
+    return setupRichMenu(img, p.keep === '1');
+  },
+  // ดูว่าตอนนี้มี Rich Menu อะไรอยู่บ้าง
+  list_richmenu: function(){ return rmApi('get', 'https://api.line.me/v2/bot/richmenu/list'); },
   // ทดสอบการ์ดเมนู OA: ?action=test_oamenu&key=แจ้งซ่อม&to=<lineUserId>
   test_oamenu: function(p){
     var k = p.key || 'แจ้งซ่อม';
@@ -1094,6 +1102,83 @@ function replyFlex(token, alt, bubble){
     });
     return { status: r.getResponseCode(), body: String(r.getContentText()).slice(0,300) };
   }catch(e){ return { error:String(e) }; }
+}
+// ============================================================
+//  ติดตั้ง Rich Menu ผ่าน Messaging API (กำหนดพิกัดเองได้ ไม่ติดข้อจำกัดเทมเพลต)
+// ============================================================
+function rmToken(){ return PropertiesService.getScriptProperties().getProperty('LINE_PUSH_TOKEN'); }
+function rmApi(method, url, payload, ct){
+  var opt = { method: method, muteHttpExceptions: true,
+    headers: { Authorization: 'Bearer ' + rmToken() } };
+  if(payload){ opt.contentType = ct || 'application/json';
+    opt.payload = (ct ? payload : JSON.stringify(payload)); }
+  var r = UrlFetchApp.fetch(url, opt);
+  var body = String(r.getContentText() || '');
+  try{ return { status: r.getResponseCode(), body: JSON.parse(body) }; }
+  catch(e){ return { status: r.getResponseCode(), body: body.slice(0, 300) }; }
+}
+/** พื้นที่กดทั้ง 7 จุด — ตรงกับภาพ (แบนเนอร์ 420px + ปุ่ม 2 แถว แถวละ 633px) */
+function rmAreas(){
+  var msg = function(x, y, w, h, text){
+    return { bounds:{ x:x, y:y, width:w, height:h }, action:{ type:'message', text:text } };
+  };
+  return [
+    { bounds:{ x:0, y:0, width:2500, height:420 },
+      action:{ type:'uri', uri: liffUrl('') } },              // แบนเนอร์ -> เปิดแอป
+    msg(0,    420, 833, 633, 'เมนู:แจ้งซ่อม'),
+    msg(833,  420, 834, 633, 'เมนู:งานของฉัน'),
+    msg(1667, 420, 833, 633, 'เมนู:อนุมัติ'),
+    msg(0,    1053, 833, 633, 'เมนู:เครื่องมือ'),
+    msg(833,  1053, 834, 633, 'เมนู:ESS'),
+    msg(1667, 1053, 833, 633, 'เมนู:ช่วยเหลือ')
+  ];
+}
+function setupRichMenu(imgUrl, keepOld){
+  var log = [];
+  if(!rmToken()) return { ok:false, error:'ยังไม่ได้ตั้ง LINE_PUSH_TOKEN ใน Script Properties' };
+
+  // 1) ลบเมนูเก่า (ถ้าไม่สั่งเก็บไว้)
+  if(!keepOld){
+    var old = rmApi('get', 'https://api.line.me/v2/bot/richmenu/list');
+    var list = (old.body && old.body.richmenus) || [];
+    list.forEach(function(m){
+      rmApi('delete', 'https://api.line.me/v2/bot/richmenu/' + m.richMenuId);
+      log.push('ลบเมนูเก่า ' + m.richMenuId);
+    });
+  }
+  // 2) สร้างเมนูใหม่
+  var created = rmApi('post', 'https://api.line.me/v2/bot/richmenu', {
+    size: { width: 2500, height: 1686 },
+    selected: true,
+    name: 'MySSB Connect',
+    chatBarText: 'เมนู',
+    areas: rmAreas()
+  });
+  if(created.status !== 200) return { ok:false, step:'create', res:created, log:log };
+  var id = created.body.richMenuId;
+  log.push('สร้างเมนู ' + id);
+
+  // 3) อัปโหลดรูป
+  var res = UrlFetchApp.fetch(imgUrl, { muteHttpExceptions:true });
+  if(res.getResponseCode() !== 200) return { ok:false, step:'fetch-image', url:imgUrl, status:res.getResponseCode(), log:log };
+  var blob = res.getBlob();
+  var ct = String(blob.getContentType() || '');
+  if(ct.indexOf('png') < 0 && ct.indexOf('jpeg') < 0 && ct.indexOf('jpg') < 0)
+    return { ok:false, step:'image-type', got:ct, need:'image/png หรือ image/jpeg', log:log };
+  var up = UrlFetchApp.fetch('https://api-data.line.me/v2/bot/richmenu/' + id + '/content', {
+    method:'post', contentType: ct, payload: blob.getBytes(),
+    headers:{ Authorization:'Bearer ' + rmToken() }, muteHttpExceptions:true
+  });
+  if(up.getResponseCode() !== 200)
+    return { ok:false, step:'upload', status:up.getResponseCode(), body:String(up.getContentText()).slice(0,300), log:log };
+  log.push('อัปโหลดรูปแล้ว (' + ct + ', ' + Math.round(blob.getBytes().length/1024) + 'KB)');
+
+  // 4) ตั้งเป็นเมนูเริ่มต้นของทุกคน
+  var setd = rmApi('post', 'https://api.line.me/v2/bot/user/all/richmenu/' + id);
+  if(setd.status !== 200) return { ok:false, step:'set-default', res:setd, log:log };
+  log.push('ตั้งเป็นเมนูเริ่มต้นแล้ว');
+
+  return { ok:true, richMenuId:id, areas:rmAreas().length, log:log };
 }
 function handleLineEvents(events){
   (events || []).forEach(function(ev){
