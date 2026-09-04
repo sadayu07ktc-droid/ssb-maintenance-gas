@@ -999,12 +999,13 @@ var OA_MENUS = {
       { t:'Locker',      d:'ล็อกเกอร์พนักงาน',  url:'https://hr-lockers.sadayu07-ktc.workers.dev' }
     ]
   },
-  'แจ้งเตือน': {
-    title: 'แจ้งเตือนเอกสาร',
-    sub: 'Doc Control — เอกสารหมดอายุ',
+  'ESS': {
+    title: 'ESS · บริการพนักงาน',
+    sub: 'ข้อมูลส่วนตัวและงานเอกสาร',
     color: '#e11d48',
     items: [
-      { t:'Dashboard', d:'ภาพรวมเอกสารทั้งหมด', url:'https://sadayu07ktc-droid.github.io/Doc_Control_Dashboard/' },
+      { t:'โปรไฟล์ของฉัน', d:'ข้อมูลพนักงาน · ลายเซ็น', q:'profile' },
+      { t:'แจ้งเตือนเอกสารหมดอายุ', d:'Doc Control Dashboard', url:'https://sadayu07ktc-droid.github.io/Doc_Control_Dashboard/' },
       { t:'ตั้งค่าแจ้งเตือน', d:'กำหนดวันแจ้งล่วงหน้า', url:'https://sadayu07ktc-droid.github.io/Doc_Control_Notify/' },
       { t:'PostHR', d:'ติดตามการส่งเอกสาร', url:'https://portal.suksomboon.group/posthr' }
     ]
@@ -1069,6 +1070,11 @@ function oaMenuBubble(m){
 function handleMenuText(replyToken, text, uid){
   var t = String(text || '').replace(/\s+/g,'');
   var key = null;
+  // ชื่อเก่า -> ชื่อใหม่ (เผื่อ Rich Menu ตั้งไว้ก่อนเปลี่ยน)
+  var ALIAS = { 'แจ้งเตือน':'ESS', 'ess':'ESS', 'Ess':'ESS' };
+  Object.keys(ALIAS).forEach(function(a){
+    if(!key && (t === 'เมนู:' + a.replace(/s+/g,'') || t === a.replace(/s+/g,''))) key = ALIAS[a];
+  });
   Object.keys(OA_MENUS).forEach(function(k){
     if(!key && (t === 'เมนู:' + k.replace(/\s+/g,'') || t === k.replace(/\s+/g,''))) key = k;
   });
