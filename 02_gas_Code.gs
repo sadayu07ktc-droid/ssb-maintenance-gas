@@ -1150,18 +1150,19 @@ function rmApi(method, url, payload, ct){
 }
 /** พื้นที่กดทั้ง 7 จุด — ตรงกับภาพ (แบนเนอร์ 420px + ปุ่ม 2 แถว แถวละ 633px) */
 function rmAreas(){
-  var msg = function(x, y, w, h, text){
-    return { bounds:{ x:x, y:y, width:w, height:h }, action:{ type:'message', text:text } };
+  // กดแล้วเปิดแอปหน้านั้นทันที (ไม่ส่งข้อความ ไม่มีการ์ดกลาง)
+  var lk = function(x, y, w, h, screen){
+    return { bounds:{ x:x, y:y, width:w, height:h },
+             action:{ type:'uri', uri: liffUrl(screen ? ('go=' + screen) : '') } };
   };
   return [
-    { bounds:{ x:0, y:0, width:2500, height:420 },
-      action:{ type:'uri', uri: liffUrl('') } },              // แบนเนอร์ -> เปิดแอป
-    msg(0,    420, 833, 633, 'เมนู:แจ้งซ่อม'),
-    msg(833,  420, 834, 633, 'เมนู:งานของฉัน'),
-    msg(1667, 420, 833, 633, 'เมนู:อนุมัติ'),
-    msg(0,    1053, 833, 633, 'เมนู:เครื่องมือ'),
-    msg(833,  1053, 834, 633, 'เมนู:ESS'),
-    msg(1667, 1053, 833, 633, 'เมนู:ช่วยเหลือ')
+    lk(0,    0,    2500, 420, ''),          // แบนเนอร์ -> หน้าหลัก
+    lk(0,    420,  833,  633, 'repair'),    // แจ้งซ่อม
+    lk(833,  420,  834,  633, 'mine'),      // งานของฉัน
+    lk(1667, 420,  833,  633, 'approve'),   // อนุมัติ
+    lk(0,    1053, 833,  633, 'toolkit'),   // เครื่องมือ (AI Toolkit)
+    lk(833,  1053, 834,  633, 'profile'),   // ESS -> โปรไฟล์
+    lk(1667, 1053, 833,  633, 'help')       // ช่วยเหลือ -> เปิดผู้ช่วยแชท
   ];
 }
 function setupRichMenu(imgUrl, keepOld){
