@@ -304,7 +304,7 @@ var API = {
     if(cur && String(cur.asset_category) === 'building'){
       base.status = 'in_progress';
       patchByTicket(SHEETS.REQ, p.ticket_no, base);
-      logStatus(p.ticket_no, cur.status, 'in_progress', p.actor||'admin', 'มอบหมาย ' + (p.assignee_name||'') + ' → ส่งเข้า SiteTrack (คำร้อง)');
+      logStatus(p.ticket_no, cur.status, 'in_progress', p.actor||'admin', 'ส่งเข้า SiteTrack — รอทีมวิศวะรับงาน');
       // งานอาคาร-สถานที่ -> สร้างคำร้องใน SiteTrack (เปลี่ยนจาก to-do เดิม)
       var streq = createSiteTrackRequest(cur, p.assignee_name || '');
       ensureCol_(SHEETS.REQ, 'sitetrack_status');
