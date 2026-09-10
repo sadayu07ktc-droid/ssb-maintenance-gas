@@ -275,6 +275,11 @@ var API = {
     else notifyAdminNewTicket(t);          // ① ใบใหม่รอแอดมินตรวจ — ไม่งั้นไม่มีใครรู้ว่ามีใบเข้ามา
     return { ticket_no: t, status: rec.status };
   },
+  // ตรวจว่าใบนี้ซ้ำกับใบเดิม/ประวัติที่เบิกไปแล้วหรือไม่ — ?action=dup_check&ticket_no=...
+  dup_check: function(p){
+    denyIf(!isPrivLine(p.caller), 'เฉพาะแอดมิน/ผู้บริหาร');
+    return dupCheck(p.ticket_no);
+  },
   pending_approvals: function(){
     return getRows(SHEETS.REQ).filter(function(r){ return r.status === 'pending_approval'; }).map(strip);
   },
@@ -1223,6 +1228,102 @@ function setupRichMenu(imgUrl, keepOld){
   log.push('ตั้งเป็นเมนูเริ่มต้นแล้ว');
 
   return { ok:true, richMenuId:id, areas:rmAreas().length, log:log };
+}
+// ============================================================
+//  ตรวจใบซ้ำ — กันผู้แจ้งยื่นเบิกรายการเดิมสองรอบ
+//  เทียบกับ: ใบอื่นในระบบ + ประวัติซ่อมที่อนุมัติไปแล้ว
+// ============================================================
+function dupNorm(t){
+  return String(t == null ? '' : t).toLowerCase()
+    .replace(/[\s\u00a0]+/g, '')
+    .replace(/[.,\-_/()#]/g, '');
+}
+/** ความคล้ายของข้อความ 0-1 (bigram Dice — ใช้ได้กับภาษาไทยที่ไม่มีเว้นวรรค) */
+function dupSim(a, b){
+  a = dupNorm(a); b = dupNorm(b);
+  if(!a || !b) return 0;
+  if(a === b) return 1;
+  if(a.length < 2 || b.length < 2) return a === b ? 1 : 0;
+  var m = {}, hit = 0, tot = 0;
+  for(var i = 0; i < a.length - 1; i++){ var g = a.substr(i, 2); m[g] = (m[g] || 0) + 1; }
+  for(var j = 0; j < b.length - 1; j++){
+    var h = b.substr(j, 2); tot++;
+    if(m[h] > 0){ m[h]--; hit++; }
+  }
+  return (2 * hit) / ((a.length - 1) + tot);
+}
+function dupAmt(v){ return Math.round((Number(String(v == null ? '' : v).replace(/,/g, '')) || 0) * 100) / 100; }
+function dupDays(a, b){
+  var x = new Date(String(a).slice(0, 10)), y = new Date(String(b).slice(0, 10));
+  if(isNaN(x) || isNaN(y)) return 9999;
+  return Math.abs(Math.round((x - y) / 86400000));
+}
+/** ข้อความที่ใช้เทียบ "รายการ" ของใบหนึ่ง */
+function dupText(r){ return [r.fix_detail, r.symptom].filter(Boolean).join(' '); }
+
+function dupCheck(ticketNo){
+  var all = getRows(SHEETS.REQ);
+  var me = all.filter(function(r){ return String(r.ticket_no) === String(ticketNo); })[0];
+  if(!me) return { ok:false, error:'ไม่พบใบ ' + ticketNo };
+
+  var myAmt  = dupAmt(me.amount);
+  var myText = dupText(me);
+  var myVen  = dupNorm(me.vendor);
+  var myVeh  = String(me.vehicle_key || '');
+  var myDate = me.created_at || me.reported_at || now();
+  var WINDOW = 180;                      // มองย้อนหลังกี่วัน
+  var hits = [];
+
+  // ---- 1) เทียบกับใบอื่นในระบบ ----
+  all.forEach(function(r){
+    if(String(r.ticket_no) === String(ticketNo)) return;
+    if(['cancelled','rejected','returned'].indexOf(String(r.status)) >= 0) return;   // ใบที่ตายแล้วไม่นับ
+    if(myVeh && String(r.vehicle_key || '') !== myVeh) return;                        // ต้องรถคันเดียวกัน
+    var d = dupDays(myDate, r.created_at || r.reported_at);
+    if(d > WINDOW) return;
+
+    var sameAmt = myAmt > 0 && dupAmt(r.amount) === myAmt;
+    var sim     = dupSim(myText, dupText(r));
+    var sameVen = !!myVen && myVen === dupNorm(r.vendor);
+    var score   = (sameAmt ? 2 : 0) + (sim >= 0.55 ? 2 : (sim >= 0.45 ? 1 : 0)) + (sameVen ? 1 : 0);
+    if(score < 3) return;               // ต้องเข้าเกณฑ์อย่างน้อย 2 อย่าง
+
+    var why = [];
+    if(sameAmt) why.push('ยอดเงินเท่ากัน ' + myAmt.toLocaleString() + ' บาท');
+    if(sim >= 0.45) why.push('รายการคล้ายกัน ' + Math.round(sim * 100) + '%');
+    if(sameVen) why.push('ศูนย์/อู่เดียวกัน');
+    hits.push({
+      kind:'ticket', ticket_no:r.ticket_no, status:r.status,
+      date:String(r.created_at || r.reported_at || '').slice(0,10),
+      amount:dupAmt(r.amount), detail:dupText(r).slice(0,80),
+      vendor:r.vendor || '', requester:r.requester_name || '',
+      days:d, score:score, why:why
+    });
+  });
+
+  // ---- 2) เทียบกับประวัติที่เบิกไปแล้ว (อนุมัติจบแล้ว) ----
+  if(myVeh){
+    histOf(myVeh).forEach(function(h){
+      if(String(h['เลขที่ใบแจ้งซ่อม'] || '') === String(ticketNo)) return;
+      var d = dupDays(myDate, h['วันที่ซ่อม']);
+      if(d > WINDOW) return;
+      var sameAmt = myAmt > 0 && dupAmt(h['จำนวนเงิน']) === myAmt;
+      var sim = dupSim(myText, h['รายการซ่อม']);
+      var score = (sameAmt ? 2 : 0) + (sim >= 0.55 ? 2 : (sim >= 0.45 ? 1 : 0));
+      if(score < 3) return;
+      var why = [];
+      if(sameAmt) why.push('ยอดเงินเท่ากัน ' + myAmt.toLocaleString() + ' บาท');
+      if(sim >= 0.45) why.push('รายการคล้ายกัน ' + Math.round(sim * 100) + '%');
+      hits.push({
+        kind:'history', ticket_no:h['เลขที่ใบแจ้งซ่อม'] || '', status:'เบิกไปแล้ว',
+        date:String(h['วันที่ซ่อม'] || '').slice(0,10),
+        amount:dupAmt(h['จำนวนเงิน']), detail:String(h['รายการซ่อม'] || '').slice(0,80),
+        vendor:'', requester:'', days:d, score:score, why:why
+      });
+    });
+  }
+  hits.sort(function(a, b){ return (b.score - a.score) || (a.days - b.days); });
+  return { ok:true, ticket_no:ticketNo, amount:myAmt, count:hits.length, hits:hits.slice(0, 5) };
 }
 function handleLineEvents(events){
   (events || []).forEach(function(ev){
