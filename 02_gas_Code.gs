@@ -280,6 +280,8 @@ var API = {
     denyIf(!isPrivLine(p.caller), 'เฉพาะแอดมิน/ผู้บริหาร');
     return dupCheck(p.ticket_no);
   },
+  // สแกนย้อนหลังทั้งระบบ หาคู่ที่เข้าเกณฑ์ซ้ำ — ?action=dup_scan&days=180
+  dup_scan: function(p){ return dupScan(Number(p.days || 180)); },
   pending_approvals: function(){
     return getRows(SHEETS.REQ).filter(function(r){ return r.status === 'pending_approval'; }).map(strip);
   },
@@ -1324,6 +1326,53 @@ function dupCheck(ticketNo){
   }
   hits.sort(function(a, b){ return (b.score - a.score) || (a.days - b.days); });
   return { ok:true, ticket_no:ticketNo, amount:myAmt, count:hits.length, hits:hits.slice(0, 5) };
+}
+/** สแกนคู่ที่เข้าเกณฑ์ซ้ำในประวัติซ่อมทั้งหมด (จัดกลุ่มตามรถก่อน เพื่อไม่ให้ช้า) */
+function dupScan(windowDays){
+  windowDays = windowDays || 180;
+  var hist = getRows(SHEETS.HIST);
+  var byVeh = {};
+  hist.forEach(function(h){
+    var k = String(h.vehicle_key || h['ทะเบียนรถ'] || '').trim();
+    if(!k) return;
+    (byVeh[k] = byVeh[k] || []).push(h);
+  });
+
+  var pairs = [], scanned = 0;
+  Object.keys(byVeh).forEach(function(k){
+    var rows = byVeh[k];
+    for(var i = 0; i < rows.length; i++){
+      for(var j = i + 1; j < rows.length; j++){
+        scanned++;
+        var A = rows[i], B = rows[j];
+        var d = dupDays(A['วันที่ซ่อม'], B['วันที่ซ่อม']);
+        if(d > windowDays) continue;
+        var amtA = dupAmt(A['จำนวนเงิน']), amtB = dupAmt(B['จำนวนเงิน']);
+        var sameAmt = amtA > 0 && amtA === amtB;
+        var sim = dupSim(A['รายการซ่อม'], B['รายการซ่อม']);
+        var score = (sameAmt ? 2 : 0) + (sim >= 0.55 ? 2 : (sim >= 0.45 ? 1 : 0));
+        if(score < 3) continue;
+        var why = [];
+        if(sameAmt) why.push('ยอดเท่ากัน ' + amtA.toLocaleString());
+        why.push('รายการคล้าย ' + Math.round(sim * 100) + '%');
+        pairs.push({
+          vehicle: k,
+          plate: A['ทะเบียนรถ'] || '',
+          a: { date:String(A['วันที่ซ่อม']||'').slice(0,10), amt:amtA,
+               ticket:A['เลขที่ใบแจ้งซ่อม']||'', detail:String(A['รายการซ่อม']||'').slice(0,60) },
+          b: { date:String(B['วันที่ซ่อม']||'').slice(0,10), amt:amtB,
+               ticket:B['เลขที่ใบแจ้งซ่อม']||'', detail:String(B['รายการซ่อม']||'').slice(0,60) },
+          days: d, score: score, why: why
+        });
+      }
+    }
+  });
+  pairs.sort(function(x, y){ return (y.score - x.score) || (x.days - y.days); });
+  return {
+    total_history: hist.length, vehicles: Object.keys(byVeh).length,
+    compared: scanned, window_days: windowDays,
+    found: pairs.length, pairs: pairs.slice(0, 30)
+  };
 }
 function handleLineEvents(events){
   (events || []).forEach(function(ev){
