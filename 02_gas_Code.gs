@@ -280,6 +280,21 @@ var API = {
     denyIf(!isPrivLine(p.caller), 'เฉพาะแอดมิน/ผู้บริหาร');
     return dupCheck(p.ticket_no);
   },
+  // แอดมินกดบนกล่องเตือน: reviewed = ตรวจแล้วไม่ซ้ำ / muted = หยุดแจ้งเตือน / ว่าง = เปิดเตือนใหม่
+  dup_ack: function(p){
+    denyIf(!isAdminLine(p.actor), 'เฉพาะแอดมิน');
+    var cur = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === p.ticket_no; })[0];
+    denyIf(!cur, 'ไม่พบใบ ' + p.ticket_no);
+    ensureCol_(SHEETS.REQ, 'dup_ack');
+    var mode = String(p.mode || '');
+    var val  = mode ? [mode, p.actor_name || p.actor || '', now()].join('|') : '';
+    patchByTicket(SHEETS.REQ, p.ticket_no, { dup_ack: val, updated_at: now() });
+    logStatus(p.ticket_no, cur.status, cur.status, p.actor || 'admin',
+      mode === 'reviewed' ? 'ตรวจใบซ้ำแล้ว — ยืนยันไม่ซ้ำ'
+      : mode === 'muted'  ? 'ปิดการเตือนใบซ้ำ'
+      : 'เปิดการเตือนใบซ้ำอีกครั้ง');
+    return { ok:true, ack: dupAckOf(val) };
+  },
   // สแกนย้อนหลังทั้งระบบ หาคู่ที่เข้าเกณฑ์ซ้ำ — ?action=dup_scan&days=180
   dup_scan: function(p){ return dupScan(Number(p.days || 180)); },
   pending_approvals: function(){
@@ -1260,6 +1275,13 @@ function dupDays(a, b){
   if(isNaN(x) || isNaN(y)) return 9999;
   return Math.abs(Math.round((x - y) / 86400000));
 }
+/** แกะคอลัมน์ dup_ack ("โหมด|ชื่อคนกด|เวลา") เป็นออบเจ็กต์ */
+function dupAckOf(v){
+  var raw = String(v == null ? '' : v).trim();
+  if(!raw) return null;
+  var a = raw.split('|');
+  return { mode: a[0] || '', by: a[1] || '', at: a[2] || '' };
+}
 /** ข้อความที่ใช้เทียบ "รายการ" ของใบหนึ่ง */
 function dupText(r){ return [r.fix_detail, r.symptom].filter(Boolean).join(' '); }
 
@@ -1325,7 +1347,8 @@ function dupCheck(ticketNo){
     });
   }
   hits.sort(function(a, b){ return (b.score - a.score) || (a.days - b.days); });
-  return { ok:true, ticket_no:ticketNo, amount:myAmt, count:hits.length, hits:hits.slice(0, 5) };
+  return { ok:true, ticket_no:ticketNo, amount:myAmt, count:hits.length,
+           hits:hits.slice(0, 5), ack: dupAckOf(me.dup_ack) };
 }
 /** สแกนคู่ที่เข้าเกณฑ์ซ้ำในประวัติซ่อมทั้งหมด (จัดกลุ่มตามรถก่อน เพื่อไม่ให้ช้า) */
 function dupScan(windowDays){
