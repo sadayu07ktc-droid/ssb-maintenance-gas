@@ -282,7 +282,7 @@ var API = {
   },
   // แอดมินกดบนกล่องเตือน: reviewed = ตรวจแล้วไม่ซ้ำ / muted = หยุดแจ้งเตือน / ว่าง = เปิดเตือนใหม่
   dup_ack: function(p){
-    denyIf(!isAdminLine(p.actor), 'เฉพาะแอดมิน');
+    denyIf(!isPrivLine(p.actor), 'เฉพาะแอดมิน/ผู้อนุมัติ');
     var cur = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === p.ticket_no; })[0];
     denyIf(!cur, 'ไม่พบใบ ' + p.ticket_no);
     ensureCol_(SHEETS.REQ, 'dup_ack');
