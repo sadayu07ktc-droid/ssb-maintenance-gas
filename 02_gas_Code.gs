@@ -377,11 +377,27 @@ var API = {
     if(cur.sitetrack_id){ try{ stCall('updateRequest', { id: cur.sitetrack_id, status:'ปิด' }); }catch(e){} }
     return { ok:true };
   },
-  // แอดมินลบใบออกจากระบบ — ย้ายไปชีต Requests_Deleted ไม่ได้ลบทิ้งจริง จะได้กู้คืนได้ถ้าลบพลาด
-  delete_ticket: function(p){
+  // แอดมินลบไฟล์แนบทีละใบ — ใช้ตอนผู้แจ้งแนบบิลซ้ำ ใบแจ้งซ่อมยังอยู่ เลขรันไม่หาย
+  remove_receipt: function(p){
     denyIf(!isAdminLine(p.actor), 'เฉพาะแอดมิน');
-    denyIf(!String(p.reason || '').trim(), 'ต้องระบุเหตุผลที่ลบ');
-    return deleteTicket_(p.ticket_no, p.actor, p.reason);
+    var cur = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === p.ticket_no; })[0];
+    denyIf(!cur, 'ไม่พบใบ ' + p.ticket_no);
+
+    var list = String(cur.receipt_urls || '').split(/\s*,\s*/).filter(String);
+    var i = Number(p.index);
+    denyIf(!(i >= 0 && i < list.length), 'ไม่พบไฟล์ลำดับที่ระบุ');
+    var removed = list.splice(i, 1)[0];
+
+    patchByTicket(SHEETS.REQ, p.ticket_no, { receipt_urls: list.join(' , '), updated_at: now() });
+    try{ syncHistory(p.ticket_no, false); }catch(e){}       // ประวัติซ่อมเก็บรายการไฟล์ชุดเดียวกัน ต้องอัปตาม
+
+    // ย้ายไฟล์ใน Drive ไปถังขยะ (กู้คืนได้ 30 วัน) ไม่ได้ลบถาวร
+    var id = (String(removed).match(/\/d\/([a-zA-Z0-9_-]{20,})/) || [])[1];
+    if(id){ try{ DriveApp.getFileById(id).setTrashed(true); }catch(e){} }
+
+    try{ logStatus(p.ticket_no, cur.status, cur.status, p.actor || 'admin',
+                   'แอดมินลบไฟล์แนบลำดับที่ ' + (i + 1)); }catch(e){}
+    return { ok:true, removed:removed, left:list.length };
   },
   // ผู้แจ้งแก้ไขแล้วส่งกลับ -> กลับไปสถานะรอแอดมินตรวจ
   resubmit_ticket: function(p){
@@ -1403,73 +1419,6 @@ function dupScan(windowDays){
     found: pairs.length, pairs: pairs.slice(0, 30)
   };
 }
-/**
- * ลบใบแจ้งซ่อม = ย้ายแถวไปชีต "Requests_Deleted" แล้วลบออกจาก Requests
- * ทำแบบนี้แทนการลบทิ้งจริง เพราะใบที่ลบพลาดกู้คืนไม่ได้เลยถ้าลบตรงๆ
- * ประวัติซ่อมของรถ (MaintenanceRecords) ที่ผูกกับใบนี้ก็ย้ายตามไปด้วย
- * ไม่งั้นรายงานค่าซ่อมจะยังนับเงินของใบที่ถูกลบไปแล้ว
- */
-function deleteTicket_(ticketNo, actor, reason){
-  ticketNo = String(ticketNo || '').trim();
-  if(!ticketNo) return { ok:false, error:'ไม่ได้ระบุเลขที่ใบ' };
-
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var src = sh(SHEETS.REQ);
-  var vals = src.getDataRange().getValues();
-  var head = vals[0];
-  var tcol = head.indexOf('ticket_no');
-  var rowIdx = -1;
-  for(var i = 1; i < vals.length; i++){
-    if(String(vals[i][tcol]) === ticketNo){ rowIdx = i; break; }
-  }
-  if(rowIdx < 0) return { ok:false, error:'ไม่พบใบ ' + ticketNo };
-
-  var cur = {};
-  head.forEach(function(h, c){ cur[h] = vals[rowIdx][c]; });
-
-  // ---- ถังขยะของใบแจ้งซ่อม ----
-  var bin = ss.getSheetByName('Requests_Deleted');
-  if(!bin){
-    bin = ss.insertSheet('Requests_Deleted');
-    bin.appendRow(head.concat(['deleted_at', 'deleted_by', 'delete_reason']));
-    bin.setFrozenRows(1);
-  }
-  bin.appendRow(vals[rowIdx].concat([now(), actor || 'admin', reason || '']));
-  src.deleteRow(rowIdx + 1);
-
-  // ---- ประวัติซ่อมของรถที่ผูกกับใบนี้ ----
-  var movedHist = 0;
-  try{
-    var hs = sh(SHEETS.HIST);
-    var hv = hs.getDataRange().getValues();
-    var hh = hv[0];
-    var hc = hh.indexOf('เลขที่ใบแจ้งซ่อม');
-    if(hc >= 0){
-      var hbin = ss.getSheetByName('MaintenanceRecords_Deleted');
-      // ไล่จากล่างขึ้นบน ไม่งั้นเลขแถวจะเลื่อนระหว่างลบ
-      for(var j = hv.length - 1; j >= 1; j--){
-        if(String(hv[j][hc]) !== ticketNo) continue;
-        if(!hbin){
-          hbin = ss.insertSheet('MaintenanceRecords_Deleted');
-          hbin.appendRow(hh.concat(['deleted_at', 'deleted_by', 'delete_reason']));
-          hbin.setFrozenRows(1);
-        }
-        hbin.appendRow(hv[j].concat([now(), actor || 'admin', reason || '']));
-        hs.deleteRow(j + 1);
-        movedHist++;
-      }
-    }
-  }catch(e){ /* ประวัติย้ายไม่สำเร็จ ไม่ควรทำให้การลบใบล้มทั้งหมด */ }
-
-  // ---- ปิดงานฝั่ง SiteTrack กันวิศวะทำงานเก้อ ----
-  if(cur.sitetrack_id){ try{ stCall('updateRequest', { id: cur.sitetrack_id, status:'ปิด' }); }catch(e){} }
-
-  // ---- ไทม์ไลน์เก็บไว้เป็นหลักฐานว่าใครลบ ----
-  try{ logStatus(ticketNo, cur.status, 'deleted', actor || 'admin', 'แอดมินลบใบออกจากระบบ: ' + (reason || '')); }catch(e){}
-
-  return { ok:true, ticket_no:ticketNo, moved_history:movedHist };
-}
-
 function handleLineEvents(events){
   (events || []).forEach(function(ev){
     // ---- ข้อความจาก Rich Menu ("เมนู:xxx") -> ตอบการ์ดเมนูย่อย ----
