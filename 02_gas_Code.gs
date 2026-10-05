@@ -220,7 +220,7 @@ function route(action, p){
   try {
     var fn = API[action];
     if(!fn) return json({ ok:false, error:'unknown action: ' + action });
-    return json({ ok:true, data: fn(p||{}) });
+    return json({ ok:true, data: idem_(action, p||{}, function(){ return fn(p||{}); }) });
   } catch(err){ return json({ ok:false, error: String(err) }); }
 }
 
@@ -259,6 +259,10 @@ var API = {
       var veh0 = getRows(SHEETS.VEH).filter(function(x){ return x.vehicle_key === p.vehicle_key; })[0];
       denyIf(!veh0 || !vehAllows(veh0, emp0), 'คุณไม่มีสิทธิ์แจ้งซ่อมรถคันนี้ — ติดต่อ HR');
     }
+    // ออกเลข + บันทึกในล็อกเดียวกัน กันคนกดส่งพร้อมกันแล้วได้เลขชน
+    var lkT = LockService.getScriptLock();
+    if(!lkT.tryLock(20000)) throw 'ระบบกำลังบันทึกรายการอื่น ลองใหม่อีกครั้ง';
+    try {
     var t = ticketNo();
     var rec = { ticket_no: t, reported_at: now(), created_at: now(), updated_at: now() };
     HEADERS.Requests.forEach(function(h){ if(p[h] !== undefined) rec[h] = p[h]; });
@@ -271,6 +275,7 @@ var API = {
     rec.status = (byAdmin && String(p.asset_category) !== 'building') ? 'pending_approval' : 'submitted';
     appendObj(SHEETS.REQ, rec);
     logStatus(t, '', rec.status, p.requester_id || '', byAdmin ? 'แอดมินแจ้งเอง → ส่งอนุมัติเลย' : '');
+    } finally { lkT.releaseLock(); }
     if(rec.status === 'pending_approval') notifyApprovalCard(t, false);
     else notifyAdminNewTicket(t);          // ① ใบใหม่รอแอดมินตรวจ — ไม่งั้นไม่มีใครรู้ว่ามีใบเข้ามา
     return { ticket_no: t, status: rec.status };
