@@ -52,10 +52,11 @@ function patchEmp(row, patch){
   var head = s.getRange(1,1,1,s.getLastColumn()).getValues()[0];
   head.forEach(function(h,c){
     if(patch[h] === undefined) return;
-    var cell = s.getRange(row, c+1);
+    var cell = s.getRange(row, c+1), v = patch[h];
     // เบอร์โทร/รหัส ต้องเก็บเป็นข้อความ ไม่งั้น Sheets กิน 0 ตัวหน้า (0834847856 -> 834847856)
-    if(h === 'phone' || h === 'emp_code') cell.setNumberFormat('@');
-    cell.setValue(patch[h]);
+    // ใช้ ' นำหน้าแทน setNumberFormat — ชีตนี้เป็นตารางคอลัมน์มีประเภท setNumberFormat จะพังตอน flush (ดักไม่ได้)
+    if((h === 'phone' || h === 'emp_code') && /^0\d+$/.test(String(v))) v = "'" + v;
+    cell.setValue(v);
   });
 }
 function pubEmp(e){ return { id:e.id, full_name:e.full_name, role:(e.role||'requester'), email:e.email, department:e.department, emp_code:e.emp_code, has_pin: !!e.pin_hash }; }

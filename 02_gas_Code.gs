@@ -100,7 +100,9 @@ function getRows(name){
   var head = vals[0];
   var out = [];
   for(var i=1;i<vals.length;i++){
-    if(vals[i].join('') === '') continue;
+    // แถวว่าง = ทุกช่องว่างหรือ FALSE — ชีตที่แปลงเป็น "ตาราง" อ่านกล่องติ๊กที่ว่างเป็น FALSE ทั้งคอลัมน์
+    // ถ้าเช็คแค่ join('') แถวว่างเกือบพันแถวจะถูกนับเป็นข้อมูล (เคยเกิดกับ Employees 30 ก.ย.)
+    if(vals[i].every(function(v){ return v === '' || v === false; })) continue;
     var o = {};
     for(var c=0;c<head.length;c++){
       var val = vals[i][c];
@@ -431,6 +433,8 @@ var API = {
     denyIf(!isApproverLine(p.approver_line_id), 'เฉพาะผู้อนุมัติ');
     var cur = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === p.ticket_no; })[0];
     if(!cur) throw 'ticket not found';
+    // หน้าเว็บส่งแบบเบื้องหลัง + ลองซ้ำเองเมื่อเน็ตสะดุด -> ใบที่อนุมัติไปแล้วตอบ ok เฉย ๆ (กัน PDF/ไลน์/งาน To-do ซ้ำ)
+    if(String(cur.status) === 'approved') return { ok:true, already:true, pdf_url:String(cur.pdf_url||'') };
     patchByTicket(SHEETS.REQ, p.ticket_no, { status:'approved', approved_at: now(), approver_id: p.approver_line_id||'', updated_at: now() });
     logStatus(p.ticket_no, cur.status, 'approved', p.approver_line_id||'', '');
     // ส่งงานเข้า to-do เฉพาะ "ซ่อมใน" (ช่างภายใน) — ซ่อมนอกแค่เดินเรื่องเบิก
@@ -504,6 +508,40 @@ var API = {
     var di = head2.indexOf('start_date');
     if(di >= 0 && s2.getLastRow() > 1) s2.getRange(2, di+1, s2.getLastRow()-1, 1).setNumberFormat('@');
     return { added: added, all_headers: head2 };
+  },
+  // คอลัมน์ "หัวหน้าแผนก" (ติ๊ก = อนุมัติใบของแผนกตัวเองได้ เช่น ใบจองรถ) — เรียกซ้ำได้ ไม่ทำอะไรถ้ามีแล้ว
+  // หนึ่งแผนกติ๊กได้หลายคน ใครกดก่อนก็ผ่าน · จับคู่ด้วยคอลัมน์ department
+  add_dept_approver_col: function(){
+    ensureCol_(SHEETS.EMP, 'dept_approver');
+    var s = sh(SHEETS.EMP);
+    var head = s.getRange(1,1,1,s.getLastColumn()).getValues()[0];
+    var ci = head.indexOf('dept_approver') + 1;
+    // ใส่กล่องติ๊กทั้งคอลัมน์ (รวมแถวว่างด้านล่าง พนักงานใหม่จะมีกล่องให้ติ๊กเลย)
+    var n = Math.max(s.getMaxRows() - 1, 1);
+    s.getRange(2, ci, n, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build());
+    // ค่า FALSE ใส่เฉพาะแถวที่มีพนักงานอยู่แล้ว — ถ้าใส่ถึงแถวว่าง getRows จะนับแถวว่างเป็นพนักงาน
+    // ชีตนี้มีแถวว่างคั่นอยู่ (getLastRow ไม่ได้แปลว่าทุกแถวมีคน) จึงดูทั้งแถวก่อน
+    // แถวที่มีข้อมูลอื่น -> TRUE/FALSE · แถวว่างทั้งแถว -> ช่องว่าง (ยังมีกล่องติ๊ก แต่ไม่ถูกนับเป็นพนักงาน)
+    var last = s.getLastRow(), emp = 0;
+    if(last > 1){
+      var all = s.getRange(2, 1, last - 1, s.getLastColumn()).getValues();
+      var out = all.map(function(r){
+        var other = r.filter(function(v, j){ return j !== ci - 1; }).join('');
+        if(other === '') return [''];
+        emp++;
+        return [r[ci-1] === true || String(r[ci-1]).toUpperCase() === 'TRUE'];
+      });
+      s.getRange(2, ci, last - 1, 1).setValues(out);
+    }
+    return { column: ci, header: 'dept_approver', employees: emp };
+  },
+  // ตรวจการส่งงานซ่อมเข้า To-do (ไม่คืนค่าลับ — แค่ตั้งค่าไว้หรือยัง + นับใบตามประเภทการซ่อม)
+  todo_diag: function(){
+    var c = sbProps(), req = getRows(SHEETS.REQ), cnt = {};
+    req.forEach(function(r){ var k = (r.repair_by || '-') + '/' + (r.asset_category || '-') + '/' + (r.status || '-'); cnt[k] = (cnt[k] || 0) + 1; });
+    var due = req.filter(function(r){ return r.repair_by === 'internal' && String(r.asset_category) !== 'building' && /approved|in_progress|done|sent_accounting|closed/.test(String(r.status)); })
+      .map(function(r){ return r.ticket_no; });
+    return { cfg:{ url:!!c.url, key:!!c.key, project:!!c.proj }, by_type:cnt, internal_approved:due };
   },
   dev_audit: function(){
     var emp = getRows(SHEETS.EMP);
@@ -633,6 +671,7 @@ var API = {
   reject: function(p){
     denyIf(!isApproverLine(p.approver_line_id), 'เฉพาะผู้อนุมัติ');
     var cur = getRows(SHEETS.REQ).filter(function(r){ return r.ticket_no === p.ticket_no; })[0];
+    if(cur && String(cur.status) === 'rejected' && String(cur.approver_id) === String(p.approver_line_id)) return { ok:true, already:true };
     // เก็บว่าใครเป็นคนตีกลับด้วย ไม่งั้นหน้า "ประวัติของผู้อนุมัติ" จะหาใบนี้ไม่เจอ
     patchByTicket(SHEETS.REQ, p.ticket_no, { status:'rejected', rejected_reason: p.reason||'',
       approver_id: p.approver_line_id||'', updated_at: now() });
@@ -725,12 +764,26 @@ function linePush(to, text){
   var tk = PropertiesService.getScriptProperties().getProperty('LINE_PUSH_TOKEN');
   if(!tk || !to) return;
   try{
-    UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {
+    var r = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {
       method:'post', contentType:'application/json',
       headers:{ Authorization:'Bearer '+tk },
       payload: JSON.stringify({ to:String(to), messages:[{ type:'text', text:String(text).slice(0,4900) }] }),
       muteHttpExceptions:true
     });
+    pushNote_(r, text);
+  }catch(e){}
+}
+/**
+ * จดไว้เมื่อ LINE ไม่รับข้อความ — เดิมไม่เช็คผลเลย โควตาเต็ม (429) แล้วการ์ดหายเงียบ ไม่มีใครรู้
+ * เก็บครั้งล่าสุด + จำนวนที่พลาดในวันนั้น ใน Script Properties (ดูผ่าน ?action=car_diag)
+ */
+function pushNote_(r, alt){
+  try{
+    var code = r.getResponseCode(); if(code === 200) return;
+    var sp = PropertiesService.getScriptProperties(), day = Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd');
+    var cnt = JSON.parse(sp.getProperty('PUSH_FAIL_COUNT') || '{}'); if(cnt.day !== day) cnt = { day:day, n:0 }; cnt.n++;
+    sp.setProperty('PUSH_FAIL_COUNT', JSON.stringify(cnt));
+    sp.setProperty('PUSH_FAIL_LAST', now() + ' · ' + code + ' · ' + String(alt || '').slice(0, 60) + ' · ' + String(r.getContentText()).slice(0, 160));
   }catch(e){}
 }
 // except = line_user_id ของคนที่เป็นต้นเรื่อง จะได้ไม่แจ้งเตือนกลับไปหาตัวเอง
@@ -753,12 +806,13 @@ function pushFlex(to, alt, bubble){
   var tk = PropertiesService.getScriptProperties().getProperty('LINE_PUSH_TOKEN');
   if(!tk || !to) return;
   try{
-    UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {
+    var r = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {
       method:'post', contentType:'application/json',
       headers:{ Authorization:'Bearer ' + tk },
       payload: JSON.stringify({ to:String(to), messages:[{ type:'flex', altText:String(alt).slice(0,390), contents:bubble }] }),
       muteHttpExceptions:true
     });
+    pushNote_(r, alt);
   }catch(e){}
 }
 function fxRow(label, value){
@@ -767,28 +821,303 @@ function fxRow(label, value){
     { type:'text', text:String(value || '-'), size:'sm', color:'#23264d', flex:7, wrap:true }
   ]};
 }
+/** ชื่อระบบบนหัวการ์ดทุกใบ ผู้ใช้อยู่หลายกลุ่ม ถ้าไม่ติดไว้จะไม่รู้ว่าการ์ดมาจากไหน */
+function fxHead(kicker, title, chip, bgFrom, bgTo, note){
+  var c = [
+    { type:'box', layout:'horizontal', contents:[
+      { type:'text', text:'MySSB Connect', size:'xxs', color:'#ffffff', weight:'bold', flex:0 },
+      { type:'text', text:(note || 'แจ้งเตือนอัตโนมัติ'), size:'xxs', color:(note ? '#ffd591' : '#ffffffcc'),
+        weight:(note ? 'bold' : 'regular'), align:'end', gravity:'center', wrap:true }
+    ]},
+    { type:'separator', color:'#ffffff66', margin:'sm' },
+    { type:'text', text:kicker, size:'xxs', color:'#ffffffcc', margin:'md' },
+    { type:'text', text:title, size:'lg', weight:'bold', color:'#ffffff' }
+  ];
+  if (chip) {
+    // ห่อด้วยแถวแนวนอนแล้วให้ filler ดันที่เหลือ ชิปจะกว้างเท่าข้อความ
+    // ถ้าวางตรง ๆ ในกล่องแนวตั้ง Flex จะยืดชิปเต็มความกว้างกลายเป็นแถบยาว
+    c.push({ type:'box', layout:'horizontal', margin:'sm', contents:[
+      { type:'box', layout:'vertical', flex:0, cornerRadius:'20px',
+        backgroundColor:'#ffffff33', paddingAll:'4px', paddingStart:'10px', paddingEnd:'10px',
+        contents:[{ type:'text', text:chip, size:'xxs', color:'#ffffff', weight:'bold' }] },
+      { type:'filler' }
+    ]});
+  }
+  return { type:'box', layout:'vertical', paddingAll:'14px',
+    background:{ type:'linearGradient', angle:'135deg', startColor:bgFrom, endColor:bgTo },
+    contents:c };
+}
+
+/**
+ * แถบบอกว่าใบอยู่ขั้นไหนแล้ว
+ * Flex วาดกราฟไม่ได้ ทำได้แค่กล่องสีที่กำหนดความกว้าง แถบนี้จึงเป็นกล่องเรียงกัน 5 ช่อง
+ */
+var FLOW = [
+  { key:'submitted',        label:'แจ้ง' },
+  { key:'pending_approval', label:'รออนุมัติ' },
+  { key:'approved',         label:'อนุมัติ' },
+  { key:'in_progress',      label:'ซ่อม' },
+  { key:'done',             label:'เสร็จ' }
+];
+// "ทำแล้วมาเบิก" ซ่อมเสร็จ (และจ่ายเงินไปแล้ว) ก่อนจะมาขออนุมัติ ลำดับจึงกลับกับใบขออนุมัติก่อนทำ
+// ช่องแรก "ซ่อมแล้ว" ผ่านเสมอ · หลังอนุมัติไม่มีขั้นซ่อม ไปเบิกคืนเลย
+var FLOW_RE = [
+  { keys:[],                          label:'ซ่อมแล้ว' },
+  { keys:['submitted'],               label:'ส่งเบิก' },
+  { keys:['pending_approval'],        label:'รออนุมัติ' },
+  { keys:['approved','in_progress'],  label:'อนุมัติ' },
+  { keys:['done'],                    label:'เบิกคืน' }
+];
+function fxSteps(status, reimburse){
+  var flow = reimburse ? FLOW_RE : FLOW;
+  var at = reimburse ? 2 : 0;
+  for (var i = 0; i < flow.length; i++) {
+    var ks = flow[i].keys || [flow[i].key];
+    if (ks.indexOf(status) >= 0) { at = i; break; }
+  }
+  var bars = flow.map(function(_, i){
+    return { type:'box', layout:'vertical', flex:1, height:'4px', cornerRadius:'2px',
+      backgroundColor: (i < at ? '#ffd591' : (i === at ? '#ffffff' : '#ffffff40')), contents:[] };
+  });
+  var labels = flow.map(function(s, i){
+    return { type:'text', text:s.label, size:'xxs', flex:1, align:'center',
+      color: (i === at ? '#ffffff' : '#ffffff99'),
+      weight: (i === at ? 'bold' : 'regular') };
+  });
+  return [
+    { type:'box', layout:'horizontal', spacing:'xs', margin:'md', contents:bars },
+    { type:'box', layout:'horizontal', margin:'xs', contents:labels }
+  ];
+}
+
+/**
+ * เปลี่ยนข้อความบรรทัดหัวข้อของการ์ด (บรรทัดเล็กเหนือเลขใบ)
+ * ห้ามอ้างด้วยเลขตำแหน่ง เพราะหัวการ์ดมีแถบชื่อไลน์กับเส้นคั่นนำหน้าอยู่
+ * เคยพังมาแล้วตอนเพิ่มแถบชื่อไลน์ ทำให้การ์ดของแอดมินยังขึ้นหัวข้อของผู้อนุมัติ
+ */
+function fxSetKicker(bubble, text){
+  var c = bubble && bubble.header && bubble.header.contents;
+  if (!c) return bubble;
+  for (var i = 0; i < c.length; i++) {
+    if (c[i].type === 'text' && c[i].size === 'xxs' && c[i].color === '#ffffffcc') { c[i].text = text; break; }
+  }
+  return bubble;
+}
+
+/**
+ * บรรทัดที่ข้อความเป็นรายการ เช่น "เปลี่ยนแบต+ชุดปลอก+แผ่นรอง"
+ * ผู้แจ้งมักพิมพ์คั่นด้วย + ถ้าโชว์เป็นก้อนเดียวจะอ่านยาก แตกเป็นบรรทัดละข้อ
+ * แตกเฉพาะเมื่อมี + ตั้งแต่ 2 ตัวขึ้นไป ประโยคธรรมดาที่บังเอิญมี + ตัวเดียวจะไม่ถูกแตก
+ */
+function fxList(label, value){
+  var raw = String(value || '').trim();
+  var parts = [];
+  raw.split('+').map(function(x){ return x.trim(); }).filter(Boolean).forEach(function(p){
+    // ท่อนสั้นมากอย่าง R ใน "ยางปัดน้ำฝน L+R" ไม่ใช่รายการใหม่ ต่อกลับเข้าท่อนก่อนหน้า
+    if (p.length <= 2 && parts.length) parts[parts.length - 1] += '+' + p;
+    else parts.push(p);
+  });
+  if (parts.length < 3) return fxRow(label, raw || '-');
+  return { type:'box', layout:'horizontal', spacing:'sm', contents:[
+    { type:'text', text:String(label), size:'sm', color:'#8a8ca3', flex:3, weight:'bold' },
+    { type:'box', layout:'vertical', flex:7, spacing:'xs', contents: parts.map(function(p){
+      return { type:'box', layout:'horizontal', spacing:'sm', contents:[
+        { type:'text', text:'•', size:'sm', color:'#0f766e', flex:0 },
+        { type:'text', text:p, size:'sm', color:'#23264d', wrap:true, flex:1 }
+      ]};
+    })}
+  ]};
+}
+
+/** กล่องตัวเลขเด่นสองช่อง */
+function fxTile(value, label, color){
+  return { type:'box', layout:'vertical', flex:1, backgroundColor:'#f5f6fb',
+    cornerRadius:'10px', paddingAll:'10px', contents:[
+      { type:'text', text:String(value), size:'lg', weight:'bold', color:color, align:'center' },
+      { type:'text', text:String(label), size:'xxs', color:'#8a8ca3', align:'center', margin:'xs' }
+    ]};
+}
+
+/**
+ * แถบบอกว่าใบเช็คระยะนี้มาตรงรอบไหม
+ * ช่อง "รอบเช็ค" เก็บหลักไมล์ของรอบ (60,000 · 140,000) ระยะห่างจึงต้องเทียบกับรอบก่อนของรถคันเดียวกัน
+ * ข้อมูลไม่พอให้คืน null แล้วการ์ดจะไม่มีแถบนี้ ดีกว่าโชว์ตัวเลขมั่ว
+ */
+function fxMileBar(r){
+  // "รอบเช็ค" ที่ผู้แจ้งกรอก คือ "หลักไมล์ของรอบนั้น" เช่น เช็ค 60,000 · เช็ค 140,000
+  // ไม่ใช่ระยะห่างระหว่างรอบ — เคยเอาไปหารตรง ๆ แล้วได้ "เหลืออีก 130,601 กม." ซึ่งผิด
+  // ระยะห่างจริงต้องคิดจาก หลักรอบนี้ − หลักรอบก่อน (เช่น 140,000 − 130,000 = 10,000)
+  var milestone = Number(r.service_interval_km || 0);
+  var now = Number(r.mileage || 0);
+  if (!milestone || !now || !r.vehicle_key) return null;
+
+  var num = function(v){ return Number(String(v == null ? '' : v).replace(/,/g, '')) || 0; };
+
+  // วันที่ของบิล: ใช้วันเริ่มซ่อม ถ้าไม่มีใช้วันที่แจ้ง ใบที่ไม่อยู่ในระบบใหม่ (ประวัติจาก Excel) ใช้วันที่ในประวัติ
+  var reqs = null;
+  var billDay = function(ticket, fallback){
+    if (ticket) {
+      if (!reqs) { reqs = {}; getRows(SHEETS.REQ).forEach(function(x){ reqs[String(x.ticket_no)] = x; }); }
+      var q = reqs[String(ticket)];
+      if (q) return String(q.repair_start || q.reported_at || fallback || '').slice(0, 10);
+    }
+    return String(fallback || '').slice(0, 10);
+  };
+
+  // prev = เช็คระยะรอบล่าสุดที่ "ต่ำกว่า" รอบนี้ · same = ใบอื่นที่เช็ครอบเดียวกับใบนี้
+  // (histOf ตัวเดียวกับหน้าแอป รวมประวัติจาก Excel และทะเบียนเก่า-ใหม่)
+  var prev = null, same = [];
+  histOf(r.vehicle_key).forEach(function(x){
+    var t = String(x['เลขที่ใบแจ้งซ่อม'] || '');
+    if (t && t === String(r.ticket_no)) return;                                 // ไม่นับใบตัวเอง
+    var ms = num(x['ระยะเช็ค_กม']);
+    if (!ms) return;                                                            // เฉพาะใบเช็คระยะ
+    var rec = { mileage:num(x['เลขไมล์']), milestone:ms, ticket:t,
+      date:String(x['วันที่ซ่อม'] || '').slice(0, 10), amount:dupAmt(x['จำนวนเงิน']) };
+    if (ms === milestone) { same.push(rec); return; }
+    if (ms > milestone) return;                                                 // รอบที่สูงกว่าใบนี้ไม่ใช่ "รอบก่อน"
+    if (!prev || ms > prev.milestone || (ms === prev.milestone && rec.mileage > prev.mileage)) prev = rec;
+  });
+
+  // ศูนย์บางแห่งแยกบิลรอบเดียวกันเป็นหลายใบ (ค่าแรง / อะไหล่)
+  // บิลวันเดียวกันแต่ยอดต่างกัน = แยกบิล ถูกต้อง · วันต่างกัน หรือยอดเท่ากันเป๊ะ = น่าจะเบิกซ้ำ
+  var myDay = billDay(r.ticket_no, r.repair_start || r.reported_at);
+  var myAmt = dupAmt(r.amount);
+  var splits = [], dups = [];
+  same.forEach(function(s){
+    var d = billDay(s.ticket, s.date);
+    var split = !!myDay && d === myDay && !(myAmt > 0 && s.amount === myAmt);
+    (split ? splits : dups).push(s);
+  });
+  var splitNote = splits.length
+    ? { type:'text', size:'xxs', margin:'xs', color:'#8a8ca3', wrap:true,
+        text:'แยกบิลกับใบ ' + splits.map(function(s){ return s.ticket || '-'; }).join(', ') + ' (วันเดียวกัน ยอดต่างกัน)' }
+    : null;
+
+  var toMs = milestone - now;   // บวก = ยังไม่ถึงหลัก · ลบ = เลยหลักมาแล้ว
+  var timing = (toMs >= 0)
+    ? [{ type:'span', text:'ก่อนถึงรอบ ' + money(milestone) + ' อีก ', color:'#8a8ca3' },
+       { type:'span', text:money(toMs) + ' กม.', color:'#0f766e', weight:'bold' }]
+    : [{ type:'span', text:'เลยรอบ ' + money(milestone) + ' มาแล้ว ', color:'#8a8ca3' },
+       { type:'span', text:money(-toMs) + ' กม.', color:'#e24b4a', weight:'bold' }];
+
+  // เคยเช็ครอบเดียวกันไปแล้ว (และไม่ใช่แยกบิล) = น่าจะเบิกซ้ำ ผู้อนุมัติต้องเห็นชัด ๆ ก่อนกด
+  if (dups.length) {
+    var dp = dups[0];
+    return { type:'box', layout:'vertical', margin:'lg', paddingAll:'11px', cornerRadius:'8px',
+      backgroundColor:'#fdecec', contents:[
+        { type:'text', text:'⚠️ เคยเช็ครอบ ' + money(milestone) + ' ไปแล้ว', size:'xs',
+          color:'#a32d2d', weight:'bold', wrap:true },
+        { type:'text', size:'xxs', wrap:true, margin:'xs', color:'#8a2020',
+          text:'ใบ ' + (dp.ticket || '-') + (dp.date ? (' เมื่อ ' + dp.date) : '')
+               + (dp.mileage ? (' ที่ไมล์ ' + money(dp.mileage) + ' ห่างจากใบนี้ ' + money(Math.abs(now - dp.mileage)) + ' กม.') : '')
+               + (dp.amount ? (' ยอด ' + baht(dp.amount) + ' บาท') : '') },
+        { type:'text', text:'ตรวจสอบก่อนอนุมัติ อาจเป็นการเบิกซ้ำ', size:'xxs', color:'#a32d2d',
+          margin:'sm', wrap:true }
+      ]};
+  }
+
+  // ไม่มีประวัติเช็ครอบก่อน -> คิดระยะห่างไม่ได้ บอกแค่เทียบกับหลักรอบ
+  if (!prev) {
+    var nb = [
+      { type:'text', text:'รอบเช็ค ' + money(milestone) + ' กม. · ยังไม่มีประวัติเช็ครอบก่อน',
+        size:'xxs', color:'#8a8ca3', wrap:true },
+      { type:'text', size:'xxs', margin:'xs', contents:timing }
+    ];
+    if (splitNote) nb.push(splitNote);
+    return { type:'box', layout:'vertical', margin:'lg', contents:nb };
+  }
+  var interval = milestone - prev.milestone;
+
+  // วัดจากหลักรอบก่อน ไม่ใช่จากเลขไมล์จริงตอนเช็คครั้งก่อน
+  // ตัวเลขในแถบกับบรรทัด "ก่อนถึงรอบอีก X" จะได้บวกกันลงตัวพอดีรอบ ไม่ชวนงง
+  var run = Math.max(0, now - prev.milestone);
+  var pct = Math.max(0, Math.min(100, Math.round(run / interval * 100)));
+  // สีตามจังหวะ: ยังไม่ถึงหลัก = ตรงรอบ (เขียว) · เลยหลัก = เลยรอบ (แดง)
+  // วิ่งมายังไม่ถึงครึ่งรอบแต่มาเช็คแล้ว = เร็วผิดปกติ (ส้ม) ให้ผู้อนุมัติสังเกต
+  var early = run < interval * 0.5;
+  var barColor = toMs < 0 ? '#e24b4a' : (early ? '#f0a500' : '#0f766e');
+
+  var track = [{ type:'box', layout:'vertical', width:(pct < 3 ? '3%' : pct + '%'),
+                 backgroundColor:barColor, contents:[] }];
+  if (pct < 100) track.push({ type:'box', layout:'vertical', flex:1, contents:[] });
+
+  var rows = [
+    { type:'box', layout:'horizontal', contents:[
+      { type:'text', text:'จากรอบ ' + money(prev.milestone) + ' → ' + money(milestone), size:'xxs', color:'#8a8ca3', flex:0 },
+      { type:'text', size:'xxs', align:'end', contents:[
+        { type:'span', text:money(run), color:barColor, weight:'bold' },
+        { type:'span', text:' / ' + money(interval) + ' กม.', color:'#8a8ca3' }
+      ]}
+    ]},
+    { type:'box', layout:'horizontal', height:'7px', cornerRadius:'4px',
+      backgroundColor:'#edeef5', margin:'sm', contents:track },
+    { type:'text', size:'xxs', margin:'xs', contents:timing }
+  ];
+  if (early) rows.push({ type:'text', size:'xxs', margin:'xs', color:'#b45309', wrap:true,
+    text:'วิ่งมายังไม่ถึงครึ่งรอบ เข้าเช็คเร็วกว่าปกติ' });
+
+  return { type:'box', layout:'vertical', margin:'lg', contents:rows };
+}
+
+/** กล่องอาการที่แจ้ง แยกออกมาให้อ่านง่าย ไม่ปนกับบรรทัดอื่น */
+function fxNote(title, text, bg, line, titleColor, textColor){
+  return { type:'box', layout:'vertical', margin:'lg', paddingAll:'11px',
+    cornerRadius:'8px', backgroundColor:bg, borderWidth:'0px',
+    contents:[
+      { type:'text', text:title, size:'xxs', color:titleColor, weight:'bold' },
+      { type:'text', text:String(text), size:'xs', color:textColor, wrap:true, margin:'xs' }
+    ]};
+}
+
 /** สร้างการ์ดใบแจ้งซ่อมสำหรับผู้อนุมัติ — ข้อมูลชุดเดียวกับการ์ดในแอป */
 function approvalBubble(r, resend){
   var veh = r.vehicle_key ? getRows(SHEETS.VEH).filter(function(v){ return v.vehicle_key === r.vehicle_key; })[0] : null;
-  var asset = r.vehicle_key
-    ? [r.vehicle_key, veh && veh['ยี่ห้อ_รุ่น'], veh && veh.plate_current].filter(Boolean).join(' · ')
-    : [r.machine_name, r.machine_code && ('ห้อง ' + r.machine_code)].filter(Boolean).join(' · ');
   var re = (String(r.request_type) === 'reimburse');
+
+  var plate = veh && veh.plate_current ? String(veh.plate_current) : '';
+  var model = (veh && veh['ยี่ห้อ_รุ่น']) ? String(veh['ยี่ห้อ_รุ่น']) : '';
+  var sub = r.vehicle_key
+    ? [r.vehicle_key, veh && veh['ผู้รับผิดชอบ'], veh && veh['แผนก'], veh && veh['สถานที่']].filter(Boolean).join(' · ')
+    : [r.machine_code && ('ห้อง ' + r.machine_code)].filter(Boolean).join(' · ');
+  if (!model) model = r.machine_name || r.vehicle_key || '-';
+
   var body = [];
-  body.push(fxRow('รถ/เครื่อง', asset));
-  // ผู้ดูแลรถประจำคัน — บางครั้งแอดมินแจ้งแทน ผู้อนุมัติจะได้รู้ว่ารถของใคร
-  if(veh){
-    var own = [veh['ผู้รับผิดชอบ'], veh['แผนก'], veh['สถานที่']].filter(Boolean).join(' · ');
-    if(own) body.push(fxRow('ผู้ดูแลรถ', own));
-  }
-  if(r.mileage) body.push(fxRow('เลขไมล์', money(r.mileage) + ' กม.'));
-  if(r.service_interval_km) body.push(fxRow('รอบเช็ค', money(r.service_interval_km) + ' กม.'));
-  body.push(fxRow('รายการ', (KIND_TH[r.request_kind] || r.request_kind || '') + ' ' + (r.symptom || '')));
-  if(r.fix_detail) body.push(fxRow('การแก้ไข', r.fix_detail));
-  body.push(fxRow(r.repair_by === 'internal' ? 'ช่าง' : 'ศูนย์/อู่',
-    r.repair_by === 'internal' ? (r.assignee_name || 'ยังไม่มอบหมาย') : (r.vendor || 'ไม่ได้ระบุ')));
-  body.push(fxRow('จำนวนเงิน', baht(r.amount) + ' บาท'));
-  body.push(fxRow('ผู้แจ้ง', r.requester_name || ''));
+
+  // กล่องรถ — ป้ายทะเบียนเด่น ชื่อรุ่นและผู้ดูแลอยู่ข้าง ๆ
+  body.push({ type:'box', layout:'horizontal', spacing:'md', paddingAll:'11px',
+    cornerRadius:'10px', backgroundColor:'#f5f6fb', alignItems:'center', contents:[
+      (plate
+        ? { type:'box', layout:'vertical', flex:0, backgroundColor:'#0f766e', cornerRadius:'7px',
+            paddingAll:'6px', paddingStart:'9px', paddingEnd:'9px', justifyContent:'center',
+            contents:[{ type:'text', text:plate, size:'xs', weight:'bold', color:'#ffffff' }] }
+        : { type:'filler' }),
+      { type:'box', layout:'vertical', flex:1, contents:[
+        { type:'text', text:model, size:'sm', weight:'bold', color:'#23264d', wrap:true },
+        { type:'text', text:(sub || '-'), size:'xxs', color:'#8a8ca3', wrap:true, margin:'xs' }
+      ]}
+    ]});
+
+  // ตัวเลขที่ผู้อนุมัติต้องเห็นก่อนเพื่อน
+  var tiles = [fxTile(baht(r.amount), 'จำนวนเงิน (บาท)', '#0f766e')];
+  if (r.mileage) tiles.push(fxTile(money(r.mileage), 'เลขไมล์ (กม.)', '#33348f'));
+  body.push({ type:'box', layout:'horizontal', spacing:'sm', margin:'lg', contents:tiles });
+
+  var mile = fxMileBar(r);
+  if (mile) body.push(mile);
+
+  body.push({ type:'separator', margin:'lg', color:'#edeef5' });
+  body.push({ type:'box', layout:'vertical', spacing:'sm', margin:'lg', contents:(function(){
+    var rows = [];
+    rows.push(fxRow('รายการ', KIND_TH[r.request_kind] || r.request_kind || '-'));
+    if (r.fix_detail) rows.push(fxList('การแก้ไข', r.fix_detail));
+    rows.push(fxRow(r.repair_by === 'internal' ? 'ช่าง' : 'ศูนย์/อู่',
+      r.repair_by === 'internal' ? (r.assignee_name || 'ยังไม่มอบหมาย') : (r.vendor || 'ไม่ได้ระบุ')));
+    rows.push(fxRow('ผู้แจ้ง', r.requester_name || '-'));
+    return rows;
+  })()});
+
+  if (r.symptom) body.push(fxNote('อาการที่แจ้ง', r.symptom, '#f0fdfa', '#0f766e', '#0f766e', '#134e4a'));
 
   // LINE ไม่ยอมรับ color:null -> ต้องไม่ใส่คีย์ color เลยเมื่อไม่ระบุสี
   var btn = function(label, style, color, action){
@@ -801,21 +1130,28 @@ function approvalBubble(r, resend){
     return { type:'postback', label:label, data:pbData(act, r.ticket_no), displayText:(act==='approve'?'✓ อนุมัติ ':'✕ ไม่อนุมัติ ') + r.ticket_no };
   };
   var uri = function(label, url){ return { type:'uri', label:label, uri:url }; };
+
+  var head = fxHead(
+    (resend ? 'แก้ไขแล้ว ส่งอนุมัติใหม่' : 'ใบแจ้งซ่อมรออนุมัติ'),
+    String(r.ticket_no),
+    // เช็คระยะต่อท้ายด้วยรอบที่ผู้แจ้งระบุ (เช่น 140,000 กม.) ผู้อนุมัติจะรู้ทันทีว่าเบิกรอบไหน
+    (re ? 'ทำแล้วมาเบิก · ' : 'ขออนุมัติก่อนทำ · ') + (KIND_TH[r.request_kind] || 'งานซ่อม')
+      + (Number(r.service_interval_km) ? (' ' + money(r.service_interval_km) + ' กม.') : ''),
+    (re ? '#b45309' : '#0f766e'), (re ? '#7c2d12' : '#134e4a'),
+    // มุมขวาบนบอกว่าใบนี้หมายถึงอะไร ผู้อนุมัติตัดสินใจต่างกันระหว่างขอก่อนทำ กับมาขอเงินคืน
+    (re ? 'จ่ายไปแล้ว-รออนุมัติเบิกเงินคืน' : 'อนุมัติแล้วจึงเริ่มซ่อม'));
+  fxSteps(String(r.status || 'pending_approval'), re).forEach(function(x){ head.contents.push(x); });
+
   return {
     type:'bubble',
-    header:{ type:'box', layout:'vertical', backgroundColor:'#33348f', paddingAll:'14px', contents:[
-      { type:'text', text:(resend ? '🔁 แก้ไขแล้ว ส่งอนุมัติใหม่' : '📋 ใบแจ้งซ่อมรออนุมัติ'), size:'xs', color:'#c9c9ee' },
-      { type:'text', text:String(r.ticket_no), size:'lg', weight:'bold', color:'#ffffff' },
-      { type:'text', text:(re ? '💸 ทำแล้วมาเบิก — จ่ายไปแล้ว รออนุมัติเบิกคืน' : '📝 ขออนุมัติก่อนทำ — อนุมัติแล้วจึงเริ่มซ่อม'),
-        size:'xxs', color:'#ffd591', wrap:true, margin:'sm' }
-    ]},
-    body:{ type:'box', layout:'vertical', spacing:'sm', paddingAll:'14px', contents:body },
+    header: head,
+    body:{ type:'box', layout:'vertical', paddingAll:'14px', contents:body },
     footer:{ type:'box', layout:'vertical', spacing:'sm', paddingAll:'12px', contents:[
       { type:'box', layout:'horizontal', spacing:'sm', contents:[
         btn('✓ อนุมัติ', 'primary', '#22a06b', pb('✓ อนุมัติ','approve')),
         btn('✕ ไม่อนุมัติ', 'primary', '#e24b4a', pb('✕ ไม่อนุมัติ','reject'))
       ]},
-      btn('🕘 ดูรายละเอียด / ประวัติ', 'secondary', null, uri('ดูรายละเอียด', liffUrl('t=' + r.ticket_no)))
+      btn('ดูรายละเอียด / ประวัติ', 'secondary', null, uri('ดูรายละเอียด', liffUrl('t=' + r.ticket_no)))
     ]}
   };
 }
@@ -912,7 +1248,7 @@ function notifyAdminReturned(ticketNo, rev){
   var txt = '🔄 ผู้แจ้งแก้ไขแล้ว (ครั้งที่ ' + rev + ') รอตรวจอีกครั้ง: ' + ticketNo;
   try{
     var b = approvalBubble(r, false);
-    b.header.contents[0].text = '🔄 แก้ไขแล้ว — รอแอดมินตรวจอีกครั้ง (ครั้งที่ ' + rev + ')';
+    fxSetKicker(b, 'แก้ไขแล้ว — รอแอดมินตรวจอีกครั้ง (ครั้งที่ ' + rev + ')');
     b.footer.contents = [ { type:'button', style:'primary', height:'sm', color:'#33348f',
       action:{ type:'uri', label:'เปิดใบงาน / ตรวจสอบ', uri:liffUrl('t=' + ticketNo) } } ];
     ids.forEach(function(id){ pushFlex(id, txt, b); });
@@ -927,7 +1263,7 @@ function notifyAdminNewTicket(ticketNo){
   try{
     var b = approvalBubble(r, false);
     // เปลี่ยนหัวการ์ด + ปุ่ม ให้เป็นมุมของแอดมิน (ตรวจแล้วส่งต่อ ไม่ใช่อนุมัติ)
-    b.header.contents[0].text = '📥 ใบแจ้งซ่อมใหม่ — รอแอดมินตรวจ';
+    fxSetKicker(b, 'ใบแจ้งซ่อมใหม่ — รอแอดมินตรวจ');
     b.footer.contents = [
       { type:'button', style:'primary', height:'sm', color:'#33348f',
         action:{ type:'uri', label:'เปิดใบงาน / ตรวจสอบ', uri:liffUrl('t=' + ticketNo) } }
@@ -1428,6 +1764,9 @@ function handleLineEvents(events){
   (events || []).forEach(function(ev){
     // ---- ข้อความจาก Rich Menu ("เมนู:xxx") -> ตอบการ์ดเมนูย่อย ----
     if(ev && ev.type === 'message' && ev.message && ev.message.type === 'text'){
+      // กำลังรอเหตุผล "ไม่อนุมัติใบจองรถ" จากคนนี้ -> ข้อความนี้คือเหตุผล (06_gas_carbook.gs)
+      try{ if(carReasonText_(ev)) return; }catch(e){}
+      try{ if(roomReasonText_(ev)) return; }catch(e){}   // เหตุผลไม่อนุมัติการจองห้อง (08_gas_room.gs)
       handleMenuText(ev.replyToken, String(ev.message.text || '').trim(), ev.source && ev.source.userId);
       return;
     }
@@ -1438,6 +1777,17 @@ function handleLineEvents(events){
     var reply = ev.replyToken;
 
     if(d.s !== pbSig(d.act, d.t)){ lineReply(reply, '❌ ลิงก์ไม่ถูกต้อง'); return; }
+
+    // ---- ใบจองรถ (act ขึ้นต้น car_) ----
+    if(/^car_/.test(d.act)){
+      try{ carPostback_(d, uid, reply); }catch(err){ lineReply(reply, 'ℹ️ ' + String(err)); }
+      return;
+    }
+    // ---- จองห้องประชุม (act ขึ้นต้น rm_) ----
+    if(/^rm_/.test(d.act)){
+      try{ roomPostback_(d, uid, reply); }catch(err){ lineReply(reply, 'ℹ️ ' + String(err)); }
+      return;
+    }
 
     // ---- อนุมัติ/ปฏิเสธ "คำขอลงทะเบียน" (เฉพาะแอดมิน) ----
     if(d.act === 'uok' || d.act === 'uno'){
@@ -1600,7 +1950,9 @@ function pollSiteTrackDone(){
 }
 
 function pollTodoDone(){
+  try{ PropertiesService.getScriptProperties().setProperty('POLL_LAST', now()); }catch(e){}   // ไว้เช็คว่า trigger ยังวิ่งอยู่
   try{ pollSiteTrackDone(); }catch(e){}   // เกาะ trigger เดิม ไม่ต้องตั้งใหม่
+  try{ roomRemindDaily_(); }catch(e){}    // แจ้งแอดมินล่วงหน้า 2 วันก่อนวันประชุม (วันละครั้ง · 08_gas_room.gs)
   var c = sbProps();
   if(!c.url || !c.key) return;
   var P = PropertiesService.getScriptProperties();
